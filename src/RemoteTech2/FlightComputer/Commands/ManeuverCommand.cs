@@ -41,7 +41,7 @@ namespace RemoteTech
             if (RemainingDelta > 0)
             {
                 var forward = Node.GetBurnVector(f.Vessel.orbit).normalized;
-                var up = (f.SignalProcessor.Body.position - f.SignalProcessor.Position).normalized;
+                var up = (f.SignalProcessor.Vessel.mainBody.position - f.SignalProcessor.Vessel.GetWorldPos3D()).normalized;
                 var orientation = Quaternion.LookRotation(forward, up);
                 FlightCore.HoldOrientation(fcs, f, orientation);
                 fcs.mainThrottle = 1.0f;

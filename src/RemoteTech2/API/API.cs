@@ -48,35 +48,26 @@ namespace RemoteTech
         public static bool HasConnectionToKSC(Guid id)
         {
             var satellite = RTCore.Instance.Satellites[id];
-            return RTCore.Instance.Network[satellite].Any(r => RTCore.Instance.Network.GroundStations.ContainsKey(r.Goal.Guid));
+            return RTCore.Instance.Network[satellite].ConnectedToKSC();
         }
 
         public static double GetShortestSignalDelay(Guid id)
         {
             var satellite = RTCore.Instance.Satellites[id];
-            if (!RTCore.Instance.Network[satellite].Any()) return Double.PositiveInfinity;
-            return RTCore.Instance.Network[satellite].Min().Delay;
+            var connection = RTCore.Instance.Network[satellite];
+            if (!connection.Any()) return Double.PositiveInfinity;
+            return connection.ShortestDelay().SignalDelay;
         }
 
         public static double GetSignalDelayToKSC(Guid id)
         {
             var satellite = RTCore.Instance.Satellites[id];
-            if (!RTCore.Instance.Network[satellite].Any(r => RTCore.Instance.Network.GroundStations.ContainsKey(r.Goal.Guid))) return Double.PositiveInfinity;
-            return RTCore.Instance.Network[satellite].Where(r => RTCore.Instance.Network.GroundStations.ContainsKey(r.Goal.Guid)).Min().Delay;
+            return RTCore.Instance.Network[satellite].DelayToKSC();
         }
 
         public static double GetSignalDelayToSatellite(Guid a, Guid b)
         {
-            var sat_a = RTCore.Instance.Satellites[a];
-            var sat_b = RTCore.Instance.Satellites[b];
-            if (sat_a == null || sat_b == null) return Double.PositiveInfinity;
-
-            Func<ISatellite, IEnumerable<NetworkLink<ISatellite>>> neighbors = RTCore.Instance.Network.FindNeighbors;
-            Func<ISatellite, NetworkLink<ISatellite>, double> cost = RangeModelExtensions.DistanceTo;
-            Func<ISatellite, ISatellite, double> heuristic = RangeModelExtensions.DistanceTo;
-
-            var path = NetworkPathfinder.Solve(sat_a, sat_b, neighbors, cost, heuristic);
-            return path.Delay;
+            throw new NotImplementedException("Sorry");
         }
     }
 }

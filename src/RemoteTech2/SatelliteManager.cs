@@ -9,30 +9,22 @@ namespace RemoteTech
     {
         public event Action<VesselSatellite> OnRegister = delegate { };
         public event Action<VesselSatellite> OnUnregister = delegate { };
-
-        public int Count { get { return mSatelliteCache.Count; } }
+        public int Count { get { return satelliteCache.Count; } }
         public VesselSatellite this[Guid g] { get { return For(g); } }
         public VesselSatellite this[Vessel v] { get { if (v == null) return null; return For(v.id); } }
 
-        private readonly Dictionary<Guid, List<ISignalProcessor>> mLoadedSpuCache =
+        private readonly Dictionary<Guid, List<ISignalProcessor>> loadedSpuCache =
             new Dictionary<Guid, List<ISignalProcessor>>();
-        private readonly Dictionary<Guid, VesselSatellite> mSatelliteCache =
+        private readonly Dictionary<Guid, VesselSatellite> satelliteCache =
             new Dictionary<Guid, VesselSatellite>();
 
         public SatelliteManager()
         {
             GameEvents.onVesselCreate.Add(OnVesselCreate);
             GameEvents.onVesselDestroy.Add(OnVesselDestroy);
-            GameEvents.onVesselGoOnRails.Add(OnVesselOnRails);
 
-            OnRegister += vs =>
-            {
-                RTLog.Notify("SatelliteManager: OnRegister({0})", vs);
-            };
-            OnUnregister += vs => 
-            {
-                RTLog.Notify("SatelliteManager: OnUnregister({0})", vs);
-            };
+            OnRegister += vs => RTLog.Notify("SatelliteManager: OnRegister({0})", vs);
+            OnUnregister += vs => RTLog.Notify("SatelliteManager: OnUnregister({0})", vs);
         }
 
         /// <summary>
@@ -41,27 +33,29 @@ namespace RemoteTech
         /// <param name="vessel">The vessel.</param>
         /// <param name="spu">The signal processor.</param>
         /// <returns>Guid key under which the signal processor was registered.</returns>
-        public Guid Register(Vessel vessel, ISignalProcessor spu)
+        public Guid Register(ISignalProcessor spu)
         {
-            Guid key = vessel.id;
             RTLog.Notify("SatelliteManager: Register({0})", spu);
+            Guid key = spu.Guid;
 
-            if (!mLoadedSpuCache.ContainsKey(key))
+            if (!loadedSpuCache.ContainsKey(key))
             {
-                UnregisterProto(vessel.id);
-                mLoadedSpuCache[key] = new List<ISignalProcessor>();
+                UnregisterProto(spu.Vessel);
+                loadedSpuCache[key] = new List<ISignalProcessor>();
             }
+
             // Add if non duplicate
-            ISignalProcessor instance = mLoadedSpuCache[key].Find(x => x == spu);
-            if (instance == null)
+            if (!loadedSpuCache[key].Contains(spu))
             {
-                mLoadedSpuCache[key].Add(spu);
-                // Create a new satellite if it's the only loaded signal processor.
-                if (mLoadedSpuCache[key].Count == 1)
+                // Create a new VesselSatellite if necessary.
+                if (loadedSpuCache[key].Count == 0)
                 {
-                    mSatelliteCache[key] = new VesselSatellite(mLoadedSpuCache[key]);
-                    OnRegister(mSatelliteCache[key]);
+                    satelliteCache[key] = new VesselSatellite(key, loadedSpuCache[key]);
+                    OnRegister.Invoke(satelliteCache[key]);
                 }
+
+                loadedSpuCache[key].Add(spu);
+                spu.Destroyed += Unregister;
             }
 
             return key;
@@ -70,184 +64,143 @@ namespace RemoteTech
         /// <summary>
         /// Unregisters the specified signal processor.
         /// </summary>
-        /// <param name="key">The key the signal processor was registered under.</param>
         /// <param name="spu">The signal processor.</param>
-        public void Unregister(Guid key, ISignalProcessor spu)
+        public void Unregister(ISignalProcessor spu)
         {
-            RTLog.Notify("SatelliteManager: Unregister({0})", spu);
+            Guid key = spu.Guid;
+            Unregister(key, spu);
+        }
+
+        private void Unregister(Guid key, ISignalProcessor spu)
+        {
+            RTLog.Notify("SatelliteManager: Unregister({0}, {1})", key, spu);
+
             // Return if nothing to unregister.
-            if (!mLoadedSpuCache.ContainsKey(key)) return;
-            // Find instance of the signal processor.
-            int instance_id = mLoadedSpuCache[key].FindIndex(x => x == spu);
-            if (instance_id != -1)
+            if (!loadedSpuCache.ContainsKey(key)) return;
+
+            // Unregister the SignalProcessor. Unregister the VesselSatellite and fire appropriate events if it has no more SignalProcessors attached.
+            // Register a ProtoSignalProcessor to be sure the Vessel didn't just go out of range. OnVesselDestroy will clean it up anyway.
+            if (loadedSpuCache[key].Contains(spu))
             {
-                // Remove satellite if no signal processors remain.
-                if (mLoadedSpuCache[key].Count == 1)
+                loadedSpuCache[key].Remove(spu);
+                if (loadedSpuCache[key].Count == 0)
                 {
-                    if (mSatelliteCache.ContainsKey(key))
-                    {
-                        VesselSatellite sat = mSatelliteCache[key];
-                        OnUnregister(sat);
-                        mSatelliteCache.Remove(key);
-                    }
-                    mLoadedSpuCache[key].RemoveAt(instance_id);
-                    mLoadedSpuCache.Remove(key);
-                }
-                else
-                {
-                    mLoadedSpuCache[key].RemoveAt(instance_id);
+                    OnUnregister(satelliteCache[key]);
+                    satelliteCache.Remove(key);
+                    loadedSpuCache.Remove(key);
+                    spu.Destroyed -= Unregister;
+                    RegisterProto(spu.Vessel);
                 }
             }
         }
 
         /// <summary>
-        /// Registers a protosatellite compiled from the unloaded vessel data.
+        /// Registers a ProtoSignalProcessor compiled from the unloaded vessel data.
         /// </summary>
         /// <param name="vessel">The vessel.</param>
         public void RegisterProto(Vessel vessel)
         {
-            Guid key = vessel.protoVessel.vesselID;
-            RTLog.Notify("SatelliteManager: RegisterProto({0}, {1})", vessel.vesselName, key);
-            // Return if there are still signal processors loaded.
-            if (mLoadedSpuCache.ContainsKey(vessel.id))
-                return;
+            RTLog.Notify("SatelliteManager: RegisterProto({0})", vessel);
 
+            Guid key = vessel.id;
+            // Return if there are still real SignalProcessors loaded.
+            if (loadedSpuCache.ContainsKey(key)) return;
+
+            // Retrieves a ProtoSignalProcessor from the vessel's data if it exists.
             ISignalProcessor spu = vessel.GetSignalProcessor();
+
+            // Fire events for the currently registered VesselSatellite if it exists.
+            UnregisterProto(vessel);
+
+            // Register the ProtoSignalProcessor by attaching it to a new VesselSatellite.
             if (spu != null)
             {
-                List<ISignalProcessor> protos = new List<ISignalProcessor>();
-                protos.Add(spu);
-                mSatelliteCache[key] = new VesselSatellite(protos);
-                OnRegister(mSatelliteCache[key]);
+                satelliteCache[key] = new VesselSatellite(key, new List<ISignalProcessor>(new [] { spu }));
+                OnRegister(satelliteCache[key]);
             }
         }
 
         /// <summary>
-        /// Unregisters the protosatellite which was compiled from the unloaded vessel data.
+        /// Unregisters the VesselSatellite that was seeded with a ProtoSignalProcessor.
         /// </summary>
         /// <param name="vessel">The vessel.</param>
-        public void UnregisterProto(Guid key)
+        public void UnregisterProto(Vessel vessel)
         {
-            RTLog.Notify("SatelliteManager: UnregisterProto({0})", key);
-            // Return if there are still signal processors loaded.
-            if (mLoadedSpuCache.ContainsKey(key))
-            {
-                return;
-            }
+            RTLog.Notify("SatelliteManager: UnregisterProto({0})", vessel);
+
+            Guid key = vessel.id;
+            // Return if there are still real SignalProcessors loaded.
+            if (loadedSpuCache.ContainsKey(key)) return;
+
             // Unregister satellite if it exists.
-            if (mSatelliteCache.ContainsKey(key))
+            if (satelliteCache.ContainsKey(key))
             {
-                OnUnregister(mSatelliteCache[key]);
-                mSatelliteCache.Remove(key);
+                OnUnregister(satelliteCache[key]);
+                satelliteCache.Remove(key);
             }
         }
 
+        /// <summary>
+        /// Loops over all registered SignalProcessors (real or not), returning the ones that are valid command stations.
+        /// </summary>
+        /// <returns></returns>
+        public IEnumerable<ISatellite> FindCommandStations()
+        {
+            return satelliteCache.Values.Where(vs => vs.IsCommandStation).Cast<ISatellite>();
+        }
+
+        /* External Call */
+        public void OnFixedUpdate() {
+            foreach (var pair in loadedSpuCache.ToList())
+            {
+                foreach (var spu in pair.Value.ToList())
+                {
+                    if (spu.Guid != pair.Key)
+                    {
+                        Unregister(pair.Key, spu);
+                        Register(spu);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns a VesselSatellite registered to the specific key. Usually accessed by vessel instead.
+        /// </summary>
+        /// <param name="key">The key.</param>
+        /// <returns></returns>
         private VesselSatellite For(Guid key)
         {
             VesselSatellite result;
-            if (mSatelliteCache.TryGetValue(key, out result)) return result;
+            if (satelliteCache.TryGetValue(key, out result)) return result;
             return null;
         }
 
-        public IEnumerable<ISatellite> FindCommandStations()
+        private void OnVesselCreate(Vessel vessel)
         {
-            return mSatelliteCache.Values.Where(vs => vs.IsCommandStation).Cast<ISatellite>();
+            RTLog.Notify("SatelliteManager: OnVesselCreate({0})", vessel);
         }
 
-        private void OnVesselOnRails(Vessel v)
+        private void OnVesselDestroy(Vessel vessel)
         {
-            if (v.parts.Count == 0)
-            {
-                RegisterProto(v);
-            }
-        }
-
-        private void OnVesselCreate(Vessel v)
-        {
-            RTLog.Notify("SatelliteManager: OnVesselCreate({0}, {1})", v.id, v.vesselName);
-        }
-
-        private void OnVesselDestroy(Vessel v)
-        {
-            RTLog.Notify("SatelliteManager: OnVesselDestroy({0}, {1})", v.id, v.vesselName);
-            UnregisterProto(v.id);
+            RTLog.Notify("SatelliteManager: OnVesselDestroy({0})", vessel);
+            UnregisterProto(vessel);
         }
 
         public void Dispose()
         {
             GameEvents.onVesselCreate.Remove(OnVesselCreate);
             GameEvents.onVesselDestroy.Remove(OnVesselDestroy);
-            GameEvents.onVesselGoOnRails.Remove(OnVesselOnRails);
         }
 
         public IEnumerator<VesselSatellite> GetEnumerator()
         {
-            return mSatelliteCache.Values.GetEnumerator();
+            return satelliteCache.Values.GetEnumerator();
         }
 
         IEnumerator IEnumerable.GetEnumerator()
         {
             return GetEnumerator();
-        }
-    }
-
-    public static partial class RTUtil
-    {
-        public static bool IsSignalProcessor(this ProtoPartModuleSnapshot ppms)
-        {
-            return ppms.GetBool("IsRTSignalProcessor");
-
-        }
-
-        public static bool IsSignalProcessor(this PartModule pm)
-        {
-            return pm.Fields.GetValue<bool>("IsRTSignalProcessor");
-        }
-
-        public static ISignalProcessor GetSignalProcessor(this Vessel v)
-        {
-            RTLog.Notify("GetSignalProcessor({0}): Check", v.vesselName);
-            if (v.loaded)
-            {
-                foreach (PartModule pm in v.Parts.SelectMany(p => p.Modules.Cast<PartModule>()).Where(pm => pm.IsSignalProcessor()))
-                {
-                    RTLog.Notify("GetSignalProcessor({0}): Found", v.vesselName);
-                    return pm as ISignalProcessor;
-                }
-
-            }
-            else
-            {
-                foreach (ProtoPartModuleSnapshot ppms in v.protoVessel.protoPartSnapshots.SelectMany(x => x.modules).Where(ppms => ppms.IsSignalProcessor()))
-                {
-                    RTLog.Notify("GetSignalProcessor({0}): Found", v.vesselName);
-                    return new ProtoSignalProcessor(ppms, v);
-                }
-            }
-            return null;
-        }
-
-        public static bool IsCommandStation(this ProtoPartModuleSnapshot ppms)
-        {
-            return ppms.GetBool("IsRTCommandStation");
-        }
-
-        public static bool IsCommandStation(this PartModule pm)
-        {
-            return pm.Fields.GetValue<bool>("IsRTCommandStation");
-        }
-
-        public static bool HasCommandStation(this Vessel v)
-        {
-            RTLog.Notify("HasCommandStation({0})", v.vesselName);
-            if (v.loaded)
-            {
-                return v.Parts.SelectMany(p => p.Modules.Cast<PartModule>()).Any(pm => pm.IsCommandStation());
-            }
-            else
-            {
-                return v.protoVessel.protoPartSnapshots.SelectMany(x => x.modules).Any(pm => pm.IsCommandStation());
-            }
         }
     }
 }

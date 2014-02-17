@@ -1,95 +1,92 @@
 ﻿using System;
+using System.Linq;
 using System.Collections.Generic;
 
 namespace RemoteTech
 {
-    public static class NetworkPathfinder
+    public class NetworkPathfinder<T>
     {
-        // All sorting related data is immutable.
-
-        public static NetworkRoute<T> Solve<T>(T start, T goal, 
-                                       Func<T, IEnumerable<NetworkLink<T>>> neighborsFunction,
-                                       Func<T, NetworkLink<T>, double> costFunction,
-                                       Func<T, T, double> heuristicFunction) where T : class
+        private class NodeInfo : IComparable<NodeInfo>
         {
-            var nodeMap = new Dictionary<T, Node<NetworkLink<T>>>();
-            var priorityQueue = new PriorityQueue<Node<NetworkLink<T>>>();
-
-            var nStart = new Node<NetworkLink<T>>(new NetworkLink<T>(start, null, LinkType.None), 0, heuristicFunction.Invoke(start, goal), null, false);
-            nodeMap[start] = nStart;
-            priorityQueue.Enqueue(nStart);
-            double cost = 0;
-
-            while (priorityQueue.Count > 0)
-            {
-                var current = priorityQueue.Dequeue();
-                if (current.Closed) continue;
-                current.Closed = true;
-                if (current.Item.Target.Equals(goal))
-                {
-                    // Return path and cost
-                    var reversePath = new List<NetworkLink<T>>();
-                    for (var node = current; node.From != null; node = node.From)
-                    {
-                        reversePath.Add(node.Item);
-                        cost += node.Cost;
-                    }
-                    reversePath.Reverse();
-                    return new NetworkRoute<T>(start, reversePath, cost);
-                }
-
-                foreach (var link in neighborsFunction.Invoke(current.Item.Target))
-                {
-                    double new_cost = current.Cost + costFunction.Invoke(current.Item.Target, link);
-                    // If the item has a node, it will either be in the closedSet, or the openSet
-                    if (nodeMap.ContainsKey(link.Target))
-                    {
-                        Node<NetworkLink<T>> n = nodeMap[link.Target];
-                        if (new_cost <= n.Cost)
-                        {
-                            // Cost via current is better than the old one, discard old node, queue new one.
-                            var new_node = new Node<NetworkLink<T>>(n.Item, new_cost, n.Heuristic, current, false);
-                            n.Closed = true;
-                            nodeMap[link.Target] = new_node;
-                            priorityQueue.Enqueue(new_node);
-                        }
-                    }
-                    else
-                    {
-                        // It is not in the openSet, create a node and add it
-                        var new_node = new Node<NetworkLink<T>>(link, new_cost,
-                                                   heuristicFunction.Invoke(link.Target, goal), current,
-                                                   false);
-                        priorityQueue.Enqueue(new_node);
-                        nodeMap[link.Target] = new_node;
-                    }
-                }
-            }
-            return NetworkRoute.Empty<T>(start);
-        }
-
-        private class Node<T> : IComparable<Node<T>>
-        {
-            public Node<T> From { get; set; }
+            public T Node { get; private set; }
+            public NetworkLink<T> From { get; private set; }
+            public double CurrentCost { get; private set; }
             public bool Closed { get; set; }
 
-            public int CompareTo(Node<T> node)
+            public NodeInfo(T node, NetworkLink<T> previous, double cost)
             {
-                return (Cost + Heuristic).CompareTo(node.Cost + node.Heuristic);
+                this.Node = node;
+                this.From = previous;
+                this.CurrentCost = cost;
+
             }
 
-            public readonly double Cost;
-            public readonly double Heuristic;
-            public readonly T Item;
-
-            public Node(T item, double cost, double heuristic, Node<T> from, bool closed)
+            public int CompareTo(NodeInfo other)
             {
-                Item = item;
-                Cost = cost;
-                Heuristic = heuristic;
-                From = from;
-                Closed = closed;
+                // 0.0 precedes 1.0.
+                return CurrentCost.CompareTo(other.CurrentCost);
             }
+        }
+
+        public readonly Func<T, IEnumerable<NetworkLink<T>>> FindNeighbors;
+        public readonly Func<T, T, double> CalculateCost;
+
+        public NetworkPathfinder(Func<T, IEnumerable<NetworkLink<T>>> neighbors,
+                                 Func<T, T, double> cost)
+        {
+            this.FindNeighbors = neighbors;
+            this.CalculateCost = cost;
+        }
+
+        public IDictionary<T, NetworkRoute<T>> GenerateConnections(T commandStation)
+        {
+            var tree = GenerateMinimumSpanningTree(commandStation);
+            var connections = new Dictionary<T, NetworkRoute<T>>();
+            var linkMap = tree.ToDictionary(p => p.Key, p => p.Value.From);
+            // Construct every path from leaf (satellite) to root (command station).
+            foreach (var pair in tree)
+            {
+                var node = pair.Key;
+                var info = pair.Value;
+                if (pair.Key.Equals(commandStation)) continue;
+
+                connections[node] = new NetworkRoute<T>(commandStation, node, linkMap, info.CurrentCost);
+            }
+
+            return connections;
+        }
+        private IDictionary<T, NodeInfo> GenerateMinimumSpanningTree(T commandStation)
+        {
+            var nodeMap = new Dictionary<T, NodeInfo>();
+            var priorityQueue = new PriorityQueue<NodeInfo>();
+
+            priorityQueue.Enqueue(nodeMap[commandStation] = new NodeInfo(commandStation, null, 0.0));
+
+            // Continue to run as long there are nodes to process.
+            while (priorityQueue.Count > 0)
+            {
+                // Process the node with the current minimum cost.
+                var top = priorityQueue.Dequeue();
+                if (top.Closed) continue;
+                // No solutions if the minimum cost is infinity.
+                if (top.CurrentCost == Double.PositiveInfinity)
+                    break;
+
+                // Parse connections to neighbors.
+                foreach (var neighbor in FindNeighbors(top.Node))
+                {
+                    var cost = CalculateCost(top.Node, neighbor.B);
+                    var alternativeCost = top.CurrentCost + cost;
+                    var contains = nodeMap.ContainsKey(neighbor.B);
+                    if (!contains || alternativeCost < nodeMap[neighbor.B].CurrentCost)
+                    {
+                        nodeMap[neighbor.B].Closed = contains;
+                        priorityQueue.Enqueue(nodeMap[neighbor.B] = new NodeInfo(neighbor.B, neighbor, alternativeCost));
+                    }
+                }
+            }
+
+            return nodeMap;
         }
     }
 }

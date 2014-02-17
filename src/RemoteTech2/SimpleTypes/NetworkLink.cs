@@ -1,31 +1,50 @@
 ﻿using System;
+using System.Linq;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
 namespace RemoteTech
 {
-    public class NetworkLink<T> : IEquatable<NetworkLink<T>>
+    public enum LinkType
     {
-        public readonly T Target;
-        public readonly List<IAntenna> Interfaces;
-        public readonly LinkType Port;
+        None,
+        Dish,
+        Omni,
+    }
+    public class NetworkLink<T> : UnorderedPair<T>
+    {
+        public readonly IList<IAntenna> InterfacesA;
+        public readonly IList<IAntenna> InterfacesB;
+        public readonly LinkType LinkType;
 
-        public NetworkLink(T sat, List<IAntenna> ant, LinkType port)
+        public NetworkLink(T a, T b, IList<IAntenna> interfacesA, IList<IAntenna> interfacesB, LinkType linkType)
+            : this(a, b, new ReadOnlyCollection<IAntenna>(interfacesA), new ReadOnlyCollection<IAntenna>(interfacesB), linkType) { }
+
+        private NetworkLink(T a, T b, ReadOnlyCollection<IAntenna> interfacesA, ReadOnlyCollection<IAntenna> interfacesB, LinkType linkType)
+            : base(a, b)
         {
-            Target = sat;
-            Interfaces = ant;
-            Port = port;
+            this.InterfacesA = interfacesA;
+            this.InterfacesB = interfacesB;
+            this.LinkType = linkType;
         }
 
-        public bool Equals(NetworkLink<T> o)
+        public NetworkLink<T> Invert()
         {
-            if (o == null) return false;
-            if (!Target.Equals(o.Target)) return false;
-            return true;
+            return new NetworkLink<T>(B, A, (ReadOnlyCollection<IAntenna>)InterfacesB, (ReadOnlyCollection<IAntenna>)InterfacesA, LinkType);
         }
 
         public override string ToString()
         {
-            return String.Format("NetworkLink(T: {0}, I: {1}, P: {2})", Target, Interfaces.ToDebugString(), Port);
+            return String.Format("NetworkLink(A: {0}, B: {1}, InterfacesA: {2}, InterfacesB: {3})", 
+                A, B, InterfacesA, InterfacesB);
+        }
+    }
+
+    public class NetworkLink
+    {
+        public static NetworkLink<T> Empty<T>(T a, T b)
+        {
+            return new NetworkLink<T>(a, b, new IAntenna[]{}, new IAntenna[]{}, LinkType.None);
         }
     }
 }

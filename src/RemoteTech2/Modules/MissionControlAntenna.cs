@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace RemoteTech
@@ -7,7 +8,7 @@ namespace RemoteTech
     {
         [Persistent] public float Omni = 75000000;
         public ISatellite Parent { get; set; }
-
+        public Vector3d Position { get { return Parent.Position; } }
         float IAntenna.Omni { get { return Omni; } }
         Guid IAntenna.Guid { get { return Parent.Guid; } }
         String IAntenna.Name { get { return "Dummy Antenna"; } }
@@ -15,7 +16,7 @@ namespace RemoteTech
         bool IAntenna.Activated { get { return true; } set { return; } }
         float IAntenna.Consumption { get { return 0.0f; } }
         bool IAntenna.CanTarget { get { return false; } }
-        Guid IAntenna.Target { get { return Guid.Empty; } set { return; } }
+        IList<Target> IAntenna.Targets { get { return new Target[0]; } }
         float IAntenna.Dish { get { return 0.0f; } }
         double IAntenna.Radians { get { return 1.0; } }
 

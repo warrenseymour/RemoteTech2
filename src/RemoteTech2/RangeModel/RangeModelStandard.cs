@@ -5,15 +5,15 @@ using System.Text;
 
 namespace RemoteTech
 {
-    public static class RangeModelStandard
+    public class RangeModelStandard : IRangeModel
     {
-        public static NetworkLink<ISatellite> GetLink(ISatellite sat_a, ISatellite sat_b)
+        public NetworkLink<ISatellite> GetLink(ISatellite sat_a, ISatellite sat_b)
         {
             double distance = sat_a.DistanceTo(sat_b);
             var omni_a = sat_a.Antennas.Where(a => a.Omni > 0);
             var omni_b = sat_b.Antennas.Where(b => b.Omni > 0);
-            var dish_a = sat_a.Antennas.Where(a => a.Dish > distance && (a.IsTargetingDirectly(sat_b) || a.IsTargetingActiveVessel(sat_b) || a.IsTargetingPlanet(sat_b, sat_a)));
-            var dish_b = sat_b.Antennas.Where(b => b.Dish > distance && (b.IsTargetingDirectly(sat_a) || b.IsTargetingActiveVessel(sat_a) || b.IsTargetingPlanet(sat_a, sat_b)));
+            var dish_a = sat_a.Antennas.Where(a => a.Dish > distance && a.IsTargeting(sat_b));
+            var dish_b = sat_b.Antennas.Where(b => b.Dish > distance && b.IsTargeting(sat_a));
 
             double bonus_a = 0;
             double bonus_b = 0;
@@ -37,10 +37,11 @@ namespace RemoteTech
 
             if (conn_a != null && conn_b != null)
             {
-                var interfaces = omni_a.Concat(dish_a).ToList();
+                var interfaces_a = omni_a.Concat(dish_a).ToList();
+                var interfaces_b = omni_b.Concat(dish_b).ToList();
                 var type = LinkType.Omni;
                 if (dish_a.Contains(conn_a) || dish_b.Contains(conn_b)) type = LinkType.Dish;
-                return new NetworkLink<ISatellite>(sat_b, interfaces, type);
+                new NetworkLink<ISatellite>(sat_a, sat_b, interfaces_a, interfaces_b, type);
             }
 
             return null;

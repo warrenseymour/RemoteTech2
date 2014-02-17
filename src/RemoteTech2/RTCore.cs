@@ -13,14 +13,13 @@ namespace RemoteTech
         public AntennaManager Antennas { get; protected set; }
         public NetworkManager Network { get; protected set; }
         public NetworkRenderer Renderer { get; protected set; }
-
-        public event Action OnFrameUpdate = delegate { };
-        public event Action OnPhysicsUpdate = delegate { };
-        public event Action OnGuiUpdate = delegate { };
-
+        public GroupManager Groups { get; protected set; }
         public FilterOverlay FilterOverlay { get; protected set; }
         public FocusOverlay FocusOverlay { get; protected set; }
         public TimeQuadrantPatcher TimeQuadrantPatcher { get; protected set; }
+
+        public event Action OnGuiUpdate = delegate { };
+        public event Action OnFrameUpdate = delegate { };
 
         public void Start()
         {
@@ -36,6 +35,7 @@ namespace RemoteTech
             Antennas = new AntennaManager();
             Network = new NetworkManager();
             Renderer = NetworkRenderer.CreateAndAttach();
+            Groups = new GroupManager();
 
             FilterOverlay = new FilterOverlay();
             FocusOverlay = new FocusOverlay();
@@ -56,7 +56,6 @@ namespace RemoteTech
         public void Update()
         {
             OnFrameUpdate.Invoke();
-
             if (FlightGlobals.ActiveVessel == null || FlightGlobals.ActiveVessel.packed) return;
             var vs = Satellites[FlightGlobals.ActiveVessel];
             if (vs != null)
@@ -82,20 +81,19 @@ namespace RemoteTech
 
         public void FixedUpdate()
         {
-            OnPhysicsUpdate.Invoke();
+            Satellites.OnFixedUpdate();
+            Antennas.OnFixedUpdate();
+            Network.OnFixedUpdate();
         }
 
         public void OnGUI()
         {
             GUI.depth = 0;
-            OnGuiUpdate.Invoke();
-
-            Action windows = delegate { };
-            foreach (var window in AbstractWindow.Windows.Values)
+            foreach (var window in AbstractWindow.Windows.Values.ToList())
             {
-                windows += window.Draw;
+                window.Draw();
             }
-            windows.Invoke();
+            OnGuiUpdate.Invoke();
         }
 
         public void OnDestroy()
@@ -107,7 +105,6 @@ namespace RemoteTech
             if (Renderer != null) Renderer.Detach();
             if (Network != null) Network.Dispose();
             if (Satellites != null) Satellites.Dispose();
-            if (Antennas != null) Antennas.Dispose();
 
             Instance = null;
         }

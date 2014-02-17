@@ -8,35 +8,22 @@ using UnityEngine;
 namespace RemoteTech
 {
     [KSPModule("Antenna")]
-    public class ModuleRTAntenna : PartModule, IAntenna
+    public class ModuleRTAntenna : PartModule, IVesselAntenna
     {
+        public event Action<IVesselAntenna> Destroyed = delegate { };
         public String Name { get { return part.partInfo.title; } }
-        public Guid Guid { get { return mRegisteredId; } }
+        public Guid Guid { get { return Vessel.id; } }
         public bool Powered { get { return IsRTPowered; } }
         public bool Activated { get { return IsRTActive; } set { SetState(value); } }
-        public bool Animating { get { return mDeployFxModules.Any(fx => fx.GetScalar > 0.1f && fx.GetScalar < 0.9f); } }
-
-        public bool CanTarget { get { return Mode1DishRange != -1.0f; } }
-        public Guid Target
-        {
-            get { return RTAntennaTarget; }
-            set
-            {
-                RTAntennaTarget = value;
-                Events["EventTarget"].guiName = RTUtil.TargetName(Target);
-                foreach (UIPartActionWindow w in GameObject.FindObjectsOfType(typeof(UIPartActionWindow)).Where(w => ((UIPartActionWindow) w).part == part))
-                {
-                    w.displayDirty = true;
-                }
-            }
-        }
-
+        public bool Animating { get { return deployFxModules.Any(fx => fx.GetScalar > 0.1f && fx.GetScalar < 0.9f); } }
+        public IList<Target> Targets { get { return targets; } }
+        public bool CanTarget { get { return Mode1DishRange > 0; } }
         public float Dish { get { return IsRTBroken ? 0.0f : ((IsRTActive && IsRTPowered) ? Mode1DishRange : Mode0DishRange) * RangeMultiplier; } }
         public double Radians { get { return RTDishRadians; } }
         public float Omni { get { return IsRTBroken ? 0.0f : ((IsRTActive && IsRTPowered) ? Mode1OmniRange : Mode0OmniRange) * RangeMultiplier; } }
         public float Consumption { get { return IsRTBroken ? 0.0f : IsRTActive ? EnergyCost * ConsumptionMultiplier : 0.0f; } }
-        public Vector3d Position { get { return vessel.GetWorldPos3D(); } }
-
+        public Vector3d Position { get { return Vessel.GetWorldPos3D(); } }
+        public Vessel Vessel { get { return vessel; } }
         private float RangeMultiplier { get { return RTSettings.Instance.RangeMultiplier; } }
         private float ConsumptionMultiplier { get { return RTSettings.Instance.ConsumptionMultiplier; } }
 
@@ -93,14 +80,14 @@ namespace RemoteTech
             RTOmniRange = 0.0f,
             RTDishRange = 0.0f;
 
-        [KSPField] // Persistence handled by Save()
-        public Guid RTAntennaTarget = Guid.Empty;
+        [KSPField(isPersistant = true)]
+        public EventListWrapper<Target> targets = new EventListWrapper<Target>(new List<Target>() { Target.Empty }); 
 
-        public int[] mDeployFxModuleIndices, mProgressFxModuleIndices;
-        private List<IScalarModule> mDeployFxModules = new List<IScalarModule>();
-        private List<IScalarModule> mProgressFxModules = new List<IScalarModule>();
-        public ConfigNode mTransmitterConfig;
-        private IScienceDataTransmitter mTransmitter;
+        public int[] deployFxModuleIndices, progressFxModuleIndices;
+        private List<IScalarModule> deployFxModules = new List<IScalarModule>();
+        private List<IScalarModule> progressFxModules = new List<IScalarModule>();
+        private ConfigNode transmitterConfig;
+        private IScienceDataTransmitter transmitter;
 
         private enum State
         {
@@ -109,40 +96,33 @@ namespace RemoteTech
             NoResources,
             Malfunction,
         }
-
-        private Guid mRegisteredId;
-
         public override string GetInfo()
         {
             var info = new StringBuilder();
 
             if (ShowEditor_OmniRange && Mode1OmniRange > 0)
-            {
-                info.AppendFormat("Omni range: {0} / {1}", RTUtil.FormatSI(Mode0OmniRange * RangeMultiplier, "m"), RTUtil.FormatSI(Mode1OmniRange * RangeMultiplier, "m")).AppendLine();
-            }
+                info.AppendFormat("Omni range: {0} / {1}", 
+                    RTUtil.FormatSI(Mode0OmniRange * RangeMultiplier, "m"), 
+                    RTUtil.FormatSI(Mode1OmniRange * RangeMultiplier, "m")).AppendLine();
+            
             if (ShowEditor_DishRange && Mode1DishRange > 0)
-            {
-                info.AppendFormat("Dish range: {0} / {1}", RTUtil.FormatSI(Mode0DishRange * RangeMultiplier, "m"), RTUtil.FormatSI(Mode1DishRange * RangeMultiplier, "m")).AppendLine();
-            }
+                info.AppendFormat("Dish range: {0} / {1}", 
+                    RTUtil.FormatSI(Mode0DishRange * RangeMultiplier, "m"), 
+                    RTUtil.FormatSI(Mode1DishRange * RangeMultiplier, "m")).AppendLine();
+            
             if (ShowEditor_EnergyReq && EnergyCost > 0)
-            {
-                info.AppendFormat("Energy req.: {0}", RTUtil.FormatConsumption(EnergyCost * ConsumptionMultiplier)).AppendLine();
-            }
+                info.AppendFormat("Energy req.: {0}", 
+                    RTUtil.FormatConsumption(EnergyCost * ConsumptionMultiplier)).AppendLine();
 
-            if (ShowEditor_DishAngle && CanTarget)
-            {
-                info.AppendFormat("Cone angle: {0} degrees", DishAngle.ToString("F2")).AppendLine();
-            }
+            if (ShowEditor_DishAngle && Mode1DishRange > 0)
+                info.AppendFormat("Cone angle: {0} degrees", 
+                    DishAngle.ToString("F2")).AppendLine();
 
             if (IsRTActive)
-            {
                 info.AppendLine("Activated by default");
-            }
 
             if (MaxQ > 0)
-            {
                 info.AppendLine("Snaps under high dynamic pressure");
-            }
 
             return info.ToString().TrimEnd(Environment.NewLine.ToCharArray());
         }
@@ -160,17 +140,17 @@ namespace RemoteTech
             Events["OverrideClose"].guiActiveUnfocused = IsRTActive && !IsRTBroken;
 
             UpdateContext();
-            StartCoroutine(SetFXModules_Coroutine(mDeployFxModules, IsRTActive ? 1.0f : 0.0f));
+            StartCoroutine(SetFXModules_Coroutine(deployFxModules, IsRTActive ? 1.0f : 0.0f));
 
             if (RTCore.Instance != null)
             {
                 var satellite = RTCore.Instance.Network[Guid];
-                bool route_home = RTCore.Instance.Network[satellite].Any(r => r.Links[0].Interfaces.Contains(this) && RTCore.Instance.Network.GroundStations.ContainsKey(r.Goal.Guid));
-                if (mTransmitter == null && route_home)
+                bool routeToKSC = RTCore.Instance.Network[satellite].ConnectedToKSC();
+                if (transmitter == null && routeToKSC)
                 {
                     AddTransmitter();
                 }
-                else if (!route_home && mTransmitter != null)
+                else if (!routeToKSC && transmitter != null)
                 {
                     RemoveTransmitter();
                 }
@@ -180,7 +160,7 @@ namespace RemoteTech
         [KSPEvent(name = "EventToggle", guiActive = false)]
         public void EventToggle() { if (Animating) return; if (IsRTActive) { EventClose(); } else { EventOpen(); } }
 
-        [KSPEvent(name = "EventTarget", guiActive = false, guiName = "Target", category = "skip_delay")]
+        [KSPEvent(name = "EventTarget", guiActive = false, guiName = "Set Target", category = "skip_delay")]
         public void EventTarget() { (new AntennaWindow(this)).Show(); }
 
         [KSPEvent(name = "EventEditorOpen", guiActive = false, guiName = "Start deployed")]
@@ -204,13 +184,22 @@ namespace RemoteTech
         [KSPAction("ActionClose", KSPActionGroup.None)]
         public void ActionClose(KSPActionParam param) { EventClose(); }
 
-        [KSPEvent(name = "OverrideTarget", active = true, guiActiveUnfocused = true, unfocusedRange = 5, externalToEVAOnly = true, guiName = "[EVA] Set Target", category = "skip_delay;skip_control")]
+        [KSPEvent(name = "OverrideTarget",   active = true, 
+                  guiActiveUnfocused = true, unfocusedRange = 5,
+                  externalToEVAOnly = true,  guiName = "[EVA] Set Target",
+                  category = "skip_delay;skip_control")]
         public void OverrideTarget() { (new AntennaWindow(this)).Show(); }
 
-        [KSPEvent(name = "OverrideOpen", active = true, guiActiveUnfocused = true, unfocusedRange = 5, externalToEVAOnly = true, guiName = "[EVA] Force Open", category = "skip_delay;skip_control")]
+        [KSPEvent(name = "OverrideOpen",     active = true, 
+                  guiActiveUnfocused = true, unfocusedRange = 5, 
+                  externalToEVAOnly = true,  guiName = "[EVA] Force Open", 
+                  category = "skip_delay;skip_control")]
         public void OverrideOpen() { EventOpen(); }
 
-        [KSPEvent(name = "OverrideClose", active = true, guiActiveUnfocused = true, unfocusedRange = 5, externalToEVAOnly = true, guiName = "[EVA] Force Close", category = "skip_delay;skip_control")]
+        [KSPEvent(name = "OverrideClose",    active = true, 
+                  guiActiveUnfocused = true, unfocusedRange = 5, 
+                  externalToEVAOnly = true,  guiName = "[EVA] Force Close", 
+                  category = "skip_delay;skip_control")]
         public void OverrideClose() { EventClose(); }
 
         public void OnConnectionRefresh()
@@ -221,47 +210,27 @@ namespace RemoteTech
         public override void OnLoad(ConfigNode node)
         {
             base.OnLoad(node);
-            if (node.HasValue("RTAntennaTarget"))
-            {
-                try
-                {
-                    Target = new Guid(node.GetValue("RTAntennaTarget"));
-                }
-                catch (FormatException)
-                {
-                    Target = Guid.Empty;
-                }
-            }
+
+            // Backwards compatibility with the old target system.
+            targets = node.HasValue(VesselAntenna.SingleTargetIdentifier) ? VesselAntenna.ParseAntennaSingleTarget(node)
+                                                                          : VesselAntenna.ParseAntennaTargets(node);
             if (node.HasValue("DishAngle"))
             {
                 RTDishRadians = Math.Cos(DishAngle / 2 * Math.PI / 180);
             }
             if (node.HasValue("DeployFxModules"))
             {
-                mDeployFxModuleIndices = KSPUtil.ParseArray<Int32>(node.GetValue("DeployFxModules"), new ParserMethod<Int32>(Int32.Parse));
+                deployFxModuleIndices = KSPUtil.ParseArray<Int32>(node.GetValue("DeployFxModules"), new ParserMethod<Int32>(Int32.Parse));
             }
             if (node.HasValue("ProgressFxModules"))
             {
-                mProgressFxModuleIndices = KSPUtil.ParseArray<Int32>(node.GetValue("ProgressFxModules"), new ParserMethod<Int32>(Int32.Parse));
+                progressFxModuleIndices = KSPUtil.ParseArray<Int32>(node.GetValue("ProgressFxModules"), new ParserMethod<Int32>(Int32.Parse));
             }
             if (node.HasNode("TRANSMITTER"))
             {
                 RTLog.Notify("ModuleRTAntenna: Found TRANSMITTER block.");
-                mTransmitterConfig = node.GetNode("TRANSMITTER");
-                mTransmitterConfig.AddValue("name", "ModuleRTDataTransmitter");
-            }
-        }
-
-        public override void OnSave(ConfigNode node)
-        {
-            base.OnSave(node);
-            if (node.HasValue("RTAntennaTarget"))
-            {
-                node.SetValue("RTAntennaTarget", RTAntennaTarget.ToString());
-            }
-            else
-            {
-                node.AddValue("RTAntennaTarget", RTAntennaTarget.ToString());
+                transmitterConfig = node.GetNode("TRANSMITTER");
+                transmitterConfig.AddValue("name", "ModuleRTDataTransmitter");
             }
         }
 
@@ -287,10 +256,7 @@ namespace RemoteTech
 
             if (RTCore.Instance != null)
             {
-                GameEvents.onVesselWasModified.Add(OnVesselModified);
-                GameEvents.onPartUndock.Add(OnPartUndock);
-                mRegisteredId = vessel.id;
-                RTCore.Instance.Antennas.Register(vessel.id, this);
+                RTCore.Instance.Antennas.Register(this);
             }
 
             LoadAnimations();
@@ -299,25 +265,25 @@ namespace RemoteTech
 
         private void LoadAnimations()
         {
-            mDeployFxModules = FindFxModules(this.mDeployFxModuleIndices, true);
-            mProgressFxModules = FindFxModules(this.mProgressFxModuleIndices, false);
-            mDeployFxModules.ForEach(fx => { fx.SetUIRead(false); fx.SetUIWrite(false); });
-            mProgressFxModules.ForEach(fx => { fx.SetUIRead(false); fx.SetUIWrite(false); });
+            deployFxModules = FindFxModules(this.deployFxModuleIndices, true);
+            progressFxModules = FindFxModules(this.progressFxModuleIndices, false);
+            deployFxModules.ForEach(fx => { fx.SetUIRead(false); fx.SetUIWrite(false); });
+            progressFxModules.ForEach(fx => { fx.SetUIRead(false); fx.SetUIWrite(false); });
         }
 
         private void AddTransmitter()
         {
-            if (mTransmitterConfig == null || !mTransmitterConfig.HasValue("name")) return;
+            if (transmitterConfig == null || !transmitterConfig.HasValue("name")) return;
             var transmitters = part.FindModulesImplementing<IScienceDataTransmitter>();
             if (transmitters.Count > 0)
             {
                 RTLog.Notify("ModuleRTAntenna: Find TRANSMITTER success.");
-                mTransmitter = transmitters.First();
+                transmitter = transmitters.First();
             }
             else
             {
                 var copy = new ConfigNode();
-                mTransmitterConfig.CopyTo(copy);
+                transmitterConfig.CopyTo(copy);
                 part.AddModule(copy);
                 AddTransmitter();
                 RTLog.Notify("ModuleRTAntenna: Add TRANSMITTER success.");
@@ -327,9 +293,9 @@ namespace RemoteTech
         private void RemoveTransmitter()
         {
             RTLog.Notify("ModuleRTAntenna: Remove TRANSMITTER success.");
-            if (mTransmitter == null) return;
-            part.RemoveModule((PartModule) mTransmitter);
-            mTransmitter = null;
+            if (transmitter == null) return;
+            part.RemoveModule((PartModule) transmitter);
+            transmitter = null;
         }
 
         private State UpdateControlState()
@@ -380,13 +346,12 @@ namespace RemoteTech
             GUI_OmniRange = RTUtil.FormatSI(Omni, "m");
             GUI_DishRange = RTUtil.FormatSI(Dish, "m");
             GUI_EnergyReq = RTUtil.FormatConsumption(Consumption);
-            Events["EventTarget"].guiName = RTUtil.TargetName(Target);
         }
 
         private void HandleDynamicPressure()
         {
             if (vessel == null) return;
-            if (!vessel.HoldPhysics && vessel.atmDensity > 0 && MaxQ > 0 && mDeployFxModules.Any(a => a.GetScalar > 0.9f))
+            if (!vessel.HoldPhysics && vessel.atmDensity > 0 && MaxQ > 0 && deployFxModules.Any(a => a.GetScalar > 0.9f))
             {
                 if (vessel.srf_velocity.sqrMagnitude * vessel.atmDensity / 2 > MaxQ)
                 {
@@ -438,41 +403,11 @@ namespace RemoteTech
         private void OnDestroy()
         {
             RTLog.Notify("ModuleRTAntenna: OnDestroy");
-            GameEvents.onVesselWasModified.Remove(OnVesselModified);
-            GameEvents.onPartUndock.Remove(OnPartUndock);
-            if (RTCore.Instance != null && mRegisteredId != Guid.Empty)
-            {
-                RTCore.Instance.Antennas.Unregister(mRegisteredId, this);
-                mRegisteredId = Guid.Empty;
-            }
+            Destroyed.Invoke(this);
         }
-
-        private void OnPartUndock(Part p)
-        {
-            if (p.vessel == vessel)
-            {
-                OnVesselModified(p.vessel);
-            } 
-        }
-
-        private void OnVesselModified(Vessel v)
-        {
-            if ((mRegisteredId != vessel.id))
-            {
-                RTCore.Instance.Antennas.Unregister(mRegisteredId, this);
-                mRegisteredId = vessel.id;
-                RTCore.Instance.Antennas.Register(vessel.id, this);
-            }
-        }
-
-        public int CompareTo(IAntenna antenna)
-        {
-            return Consumption.CompareTo(antenna.Consumption);
-        }
-
         public override string ToString()
         {
-            return String.Format("ModuleRTAntenna(Name: {0}, Guid: {1}, Dish: {2}, Omni: {3}, Target: {4}, Radians: {5})", Name, mRegisteredId, Dish, Omni, Target, Radians);
+            return String.Format("ModuleRTAntenna(Name: {0}, Guid: {1}, Dish: {2}, Omni: {3}, Target: {4}, Radians: {5})", Name, Guid, Dish, Omni, Targets.ToArray(), Radians);
         }
     }
 }

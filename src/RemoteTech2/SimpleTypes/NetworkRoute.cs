@@ -7,55 +7,33 @@ namespace RemoteTech
 {
     public class NetworkRoute<T> : IComparable<NetworkRoute<T>>
     {
-        public const float SIGNAL_SPEED = 3.0e8f;
+        public readonly T Start;
+        public readonly T Goal;
+        public readonly double Cost;
+        public readonly IDictionary<T, NetworkLink<T>> Links;
 
-        public T Goal { get { return Exists ? Links[Links.Count - 1].Target : default(T); } }
-        public T Start { get; private set; }
-        public bool Exists { get { return Links.Count > 0; } }
-
-        public double Delay { get; private set; }
-        public List<NetworkLink<T>> Links { get; private set; }
-
-        public NetworkRoute(T start, List<NetworkLink<T>> links, double cost)
+        public double SignalDelay { get { return Cost / RTSettings.Instance.SpeedOfLight; } }
+        public NetworkRoute(T a, T b, IDictionary<T, NetworkLink<T>> links, double cost)
         {
-            if (start == null) throw new ArgumentNullException("start");
-            if (links == null) links = new List<NetworkLink<T>>();
-            Start = start;
-            Links = links;
-            Delay = RTSettings.Instance.EnableSignalDelay ? cost / RTSettings.Instance.SpeedOfLight : 0.0;
+            this.Start = a;
+            this.Goal = b;
+            this.Cost = cost;
+            this.Links = new ReadOnlyDictionary<T, NetworkLink<T>>(links);
         }
 
-        public bool Contains(BidirectionalEdge<T> edge)
+        public bool Contains(UnorderedPair<T> e)
         {
-            if (Links.Count == 0) return false;
-            if ((Start.Equals(edge.A) && Links[0].Target.Equals(edge.B)) || 
-                (Start.Equals(edge.B) && Links[0].Target.Equals(edge.A))) return true;
-            for (int i = 0; i < Links.Count - 1; i++)
-            {
-                if (Links[i].Target.Equals(edge.A) && Links[i+1].Target.Equals(edge.B)) return true;
-                if (Links[i].Target.Equals(edge.B) && Links[i+1].Target.Equals(edge.A)) return true;
-            }
-            return false;
+            return Links.Any(l => l.Equals(e));
         }
 
         public int CompareTo(NetworkRoute<T> other)
         {
-            return Delay.CompareTo(other.Delay);
+            return Cost.CompareTo(other.Cost);
         }
 
         public override string ToString()
         {
-            return String.Format("NetworkRoute(Route: {{0}}, Delay: {1})", 
-                String.Join("→", Links.Select(t => t.ToString()).ToArray()),
-                Delay.ToString("F2") + "s");
-        }
-    }
-
-    public class NetworkRoute
-    {
-        public static NetworkRoute<T> Empty<T>(T start)
-        {
-            return new NetworkRoute<T>(start, null, Single.PositiveInfinity);
+            return String.Format("NetworkRoute(A: {0}, B: {1}, Hops: {2})", Start, Goal, Links.Count);
         }
     }
 }

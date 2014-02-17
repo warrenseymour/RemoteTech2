@@ -18,7 +18,7 @@
     <DebugSymbols>false</DebugSymbols>
     <DebugType>none</DebugType>
     <Optimize>false</Optimize>
-    <OutputPath>C:\Users\Sander\Desktop\KSP Dev\GameData\RemoteTech2\Plugins\</OutputPath>
+    <OutputPath>..\..\..\..\..\Desktop\KSP Dev\GameData\RemoteTech2\Plugins\</OutputPath>
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
@@ -28,7 +28,7 @@
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>none</DebugType>
     <Optimize>true</Optimize>
-    <OutputPath>C:\Users\Sander\Desktop\KSP Dev\GameData\RemoteTech2\Plugins\</OutputPath>
+    <OutputPath>..\..\..\..\..\Desktop\KSP Dev\GameData\RemoteTech2\Plugins\</OutputPath>
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
@@ -36,21 +36,19 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
-      <HintPath>C:\Users\Sander\Desktop\KSP Dev\KSP_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <HintPath>..\..\..\..\..\Desktop\KSP Dev\KSP_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="Assembly-CSharp-firstpass">
-      <HintPath>C:\Users\Sander\Desktop\KSP Dev\KSP_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
+      <HintPath>..\..\..\..\..\Desktop\KSP Dev\KSP_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="System" />
-    <Reference Include="System.Core" />
-    <Reference Include="System.Xml.Linq" />
-    <Reference Include="System.Data.DataSetExtensions" />
-    <Reference Include="System.Data" />
-    <Reference Include="System.Xml" />
+    <Reference Include="System">
+      <HintPath>..\..\..\..\..\Desktop\KSP Dev\KSP_Data\Managed\System.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>C:\Users\Sander\Desktop\KSP Dev\KSP_Data\Managed\UnityEngine.dll</HintPath>
+      <HintPath>..\..\..\..\..\Desktop\KSP Dev\KSP_Data\Managed\UnityEngine.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>
@@ -66,19 +64,23 @@
     <Compile Include="FlightComputer\FlightCore.cs" />
     <Compile Include="FlightComputer\Commands\ICommand.cs" />
     <Compile Include="FlightComputer\Commands\TargetCommand.cs" />
+    <Compile Include="GroupManager.cs" />
+    <Compile Include="Interfaces\IVesselAntenna.cs" />
     <Compile Include="Modules\MissionControlAntenna.cs" />
     <Compile Include="Modules\ProtoSignalProcessor.cs" />
+    <Compile Include="Interfaces\IRangeModel.cs" />
+    <Compile Include="RangeModel\RangeModelBuilder.cs" />
     <Compile Include="RangeModel\RangeModelStandard.cs" />
     <Compile Include="RangeModel\RangeModelRoot.cs" />
     <Compile Include="RangeModel\RangeModelExtensions.cs" />
-    <Compile Include="RTDebugUnit.cs" />
+    <Compile Include="Resources\Textures.cs" />
     <Compile Include="RTLog.cs" />
     <Compile Include="FlightComputer\DelayedCommand.cs" />
     <Compile Include="FlightComputer\FlightComputer.cs" />
     <Compile Include="FlightComputer\UIPartActionMenuPatcher.cs" />
-    <Compile Include="IAntenna.cs" />
-    <Compile Include="ISatellite.cs" />
-    <Compile Include="ISignalProcessor.cs" />
+    <Compile Include="Interfaces\IAntenna.cs" />
+    <Compile Include="Interfaces\ISatellite.cs" />
+    <Compile Include="Interfaces\ISignalProcessor.cs" />
     <Compile Include="Modules\ModuleRTAntennaPassive.cs" />
     <Compile Include="Modules\ModuleSPUPassive.cs" />
     <Compile Include="Modules\ModuleRTAntenna.cs" />
@@ -94,14 +96,21 @@
     <Compile Include="RTUtil.cs" />
     <Compile Include="SatelliteManager.cs" />
     <Compile Include="AntennaManager.cs" />
-    <Compile Include="SimpleTypes\BidirectionalEdge.cs" />
-    <Compile Include="SimpleTypes\BinaryHeap.cs" />
+    <Compile Include="SimpleTypes\AdjacencyMap.cs" />
+    <Compile Include="SimpleTypes\ConnectionMap.cs" />
+    <Compile Include="SimpleTypes\TopicEvent.cs" />
+    <Compile Include="SimpleTypes\PriorityQueue.cs" />
+    <Compile Include="SimpleTypes\ReadOnlyDictionary.cs" />
+    <Compile Include="SimpleTypes\UnorderedPair.cs" />
+    <Compile Include="SimpleTypes\EventListWrapper.cs" />
     <Compile Include="SimpleTypes\CachedField.cs" />
+    <Compile Include="SimpleTypes\CelestialBodyWrapper.cs" />
     <Compile Include="SimpleTypes\Dish.cs" />
+    <Compile Include="SimpleTypes\Group.cs" />
     <Compile Include="SimpleTypes\GUITextureButtonFactory.cs" />
     <Compile Include="SimpleTypes\NetworkRoute.cs" />
-    <Compile Include="SimpleTypes\PriorityQueue.cs" />
     <Compile Include="SimpleTypes\NetworkLink.cs" />
+    <Compile Include="SimpleTypes\Target.cs" />
     <Compile Include="UI\AbstractWindow.cs" />
     <Compile Include="UI\AntennaFragment.cs" />
     <Compile Include="UI\AntennaWindow.cs" />
@@ -116,11 +125,41 @@
     <Compile Include="UI\FilterOverlay.cs" />
     <Compile Include="UI\NetworkLine.cs" />
     <Compile Include="UI\QueueFragment.cs" />
+    <Compile Include="UI\RTGui.cs" />
     <Compile Include="UI\SatelliteFragment.cs" />
     <Compile Include="UI\TimeQuadrantPatcher.cs" />
     <Compile Include="VesselSatellite.cs" />
   </ItemGroup>
-  <ItemGroup />
+  <ItemGroup>
+    <Content Include="Resources\FilterBackground.png" />
+    <Content Include="Resources\FilterButton.png" />
+    <Content Include="Resources\FilterButtonDish.png" />
+    <Content Include="Resources\FilterButtonEmpty.png" />
+    <Content Include="Resources\FilterButtonNetwork.png" />
+    <Content Include="Resources\FilterButtonOmni.png" />
+    <Content Include="Resources\FilterButtonOmniDish.png" />
+    <Content Include="Resources\FilterButtonPath.png" />
+    <Content Include="Resources\FilterButtonPlanet.png" />
+    <Content Include="Resources\FilterButtonSatelliteGray.png" />
+    <Content Include="Resources\FilterButtonSatelliteGreen.png" />
+    <Content Include="Resources\FilterButtonSatelliteRed.png" />
+    <Content Include="Resources\FilterButtonSatelliteYellow.png" />
+    <Content Include="Resources\FlightComputerGreen.png" />
+    <Content Include="Resources\FlightComputerGreenDown.png" />
+    <Content Include="Resources\FlightComputerGreenOver.png" />
+    <Content Include="Resources\FlightComputerRed.png" />
+    <Content Include="Resources\FlightComputerRedDown.png" />
+    <Content Include="Resources\FlightComputerRedOver.png" />
+    <Content Include="Resources\FlightComputerYellow.png" />
+    <Content Include="Resources\FlightComputerYellowDown.png" />
+    <Content Include="Resources\FlightComputerYellowOver.png" />
+    <Content Include="Resources\KnowledgeButton.png" />
+    <Content Include="Resources\KnowledgeButtonActive.png" />
+    <Content Include="Resources\KnowledgeButtonHover.png" />
+    <Content Include="Resources\Mark.png" />
+    <Content Include="Resources\SatelliteIcon.png" />
+    <Content Include="Resources\TimeQuadrant.png" />
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Target Name="BeforeBuild">
   </Target>

@@ -8,7 +8,7 @@ namespace RemoteTech
 {
     public class NetworkCone : MonoBehaviour
     {
-        public CelestialBody Planet
+        public ISatellite Target
         {
             set
             {
@@ -64,14 +64,14 @@ namespace RemoteTech
             Material = new Material("Shader \"Vertex Colors/Alpha\" {Category{Tags {\"Queue\"=\"Transparent\" \"IgnoreProjector\"=\"True\" \"RenderType\"=\"Transparent\"}SubShader {Cull Off ZWrite On Blend SrcAlpha OneMinusSrcAlpha Pass {BindChannels {Bind \"Color\", color Bind \"Vertex\", vertex}}}}}");
         }
 
-        private void UpdateMesh(CelestialBody cb, IAntenna a)
+        private void UpdateMesh(ISatellite target, IAntenna a)
         {
             var camera = MapView.MapCamera.camera;
 
             var antenna_pos = ScaledSpace.LocalToScaledSpace(RTCore.Instance.Network[a.Guid].Position);
-            var planet_pos = ScaledSpace.LocalToScaledSpace(cb.position);
+            var planet_pos = ScaledSpace.LocalToScaledSpace(target.Position);
 
-            var up = cb.transform.up;
+            var up = target.Body.transform.up;
             var space = Vector3.Cross(planet_pos - antenna_pos, up).normalized * Vector3.Distance(antenna_pos, planet_pos) * (float)Math.Tan(Math.Acos(a.Radians));
             var end1 = antenna_pos + (planet_pos + space - antenna_pos).normalized * Math.Min(a.Dish / ScaledSpace.ScaleFactor, Vector3.Distance(antenna_pos, planet_pos));
             var end2 = antenna_pos + (planet_pos - space - antenna_pos).normalized * Math.Min(a.Dish / ScaledSpace.ScaleFactor, Vector3.Distance(antenna_pos, planet_pos));

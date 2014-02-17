@@ -6,156 +6,179 @@ using System.Collections.Generic;
 
 namespace RemoteTech
 {
-    public class AntennaManager : IDisposable, IEnumerable<IAntenna>
+    public class AntennaManager : IEnumerable<IVesselAntenna>
     {
-        public event Action<IAntenna> OnRegister = delegate { };
-        public event Action<IAntenna> OnUnregister = delegate { };
+        public event Action<IVesselAntenna> OnRegister = delegate { };
+        public event Action<IVesselAntenna> OnUnregister = delegate { };
+        public IEnumerable<IVesselAntenna> this[ISatellite s] { get { return For(s.Guid); } }
+        public IEnumerable<IVesselAntenna> this[Vessel v] { get { return For(v.id); } }
+        public IEnumerable<IVesselAntenna> this[Guid g] { get { return For(g); } }
 
-        public IEnumerable<IAntenna> this[ISatellite s] { get { return For(s.Guid); } }
-        public IEnumerable<IAntenna> this[Vessel v] { get { return For(v.id); } }
-        public IEnumerable<IAntenna> this[Guid g] { get { return For(g); } }
-
-        private readonly Dictionary<Guid, List<IAntenna>> mLoadedAntennaCache =
-            new Dictionary<Guid, List<IAntenna>>();
-        private readonly Dictionary<Guid, List<IAntenna>> mProtoAntennaCache =
-            new Dictionary<Guid, List<IAntenna>>();
+        private readonly Dictionary<Guid, List<IVesselAntenna>> loadedAntennaCache =
+            new Dictionary<Guid, List<IVesselAntenna>>();
+        private readonly Dictionary<Guid, List<IVesselAntenna>> protoAntennaCache =
+            new Dictionary<Guid, List<IVesselAntenna>>();
 
         public AntennaManager()
         {
-            GameEvents.onVesselGoOnRails.Add(OnVesselGoOnRails);
-
             OnRegister += a => RTLog.Notify("AntennaManager: OnRegister({0})", a.Name);
             OnUnregister += a => RTLog.Notify("AntennaManager: OnUnregister({0})", a.Name);
         }
 
-        public void Dispose()
-        {
-            GameEvents.onVesselGoOnRails.Remove(OnVesselGoOnRails);
-        }
-
-        public void Register(Guid key, IAntenna antenna)
+        /// <summary>
+        /// Registers a specified antenna.
+        /// </summary>
+        /// <param name="antenna">The antenna.</param>
+        public void Register(IVesselAntenna antenna)
         {
             RTLog.Notify("AntennaManager: Register({0})", antenna);
 
-            if (!mLoadedAntennaCache.ContainsKey(key))
+            // Create a container for all antenna sharing the same Guid.
+            var key = antenna.Guid;
+            if (!loadedAntennaCache.ContainsKey(antenna.Guid))
             {
-                mLoadedAntennaCache[key] = new List<IAntenna>();
+                loadedAntennaCache[key] = new List<IVesselAntenna>();
             }
 
-            IAntenna instance = mLoadedAntennaCache[key].Find(a => a == antenna);
-            if (instance == null)
+            // Unregister all ProtoAntennas, because the Vessel is obviously active.
+            if (protoAntennaCache.ContainsKey(key))
             {
-                if (mProtoAntennaCache.ContainsKey(key))
-                {
-                    UnregisterProtos(key);
-                }
+                UnregisterProtos(antenna.Vessel);
+            }
 
-                mLoadedAntennaCache[key].Add(antenna);
+            // Register the antenna if it wasn't. Fire the appropriate events, and listen to OnDestroy.
+            if (!loadedAntennaCache[key].Contains(antenna))
+            {
+                loadedAntennaCache[key].Add(antenna);
+                antenna.Destroyed += Unregister;
                 OnRegister.Invoke(antenna);
             }
         }
 
-        public void Unregister(Guid key, IAntenna antenna)
+        /// <summary>
+        /// Unregisters the specified antenna.
+        /// </summary>
+        /// <param name="antenna">The antenna.</param>
+        public void Unregister(IVesselAntenna antenna)
+        {
+            var key = antenna.Guid;
+            Unregister(key, antenna);
+        }
+
+        private void Unregister(Guid key, IVesselAntenna antenna)
         {
             RTLog.Notify("AntennaManager: Unregister({0})", antenna);
+            // No antennas were registered for that key.
+            if (!loadedAntennaCache.ContainsKey(key)) return;
 
-            if (!mLoadedAntennaCache.ContainsKey(key)) return;
-
-            int instance_id = mLoadedAntennaCache[key].FindIndex(x => x == antenna);
-            if (instance_id != -1)
+            // If the antenna can be found, remove, fire event.
+            // Register ProtoAntennas if it was the last antenna, because the Vessel might have been unloaded.
+            if (loadedAntennaCache[key].Remove(antenna))
             {
-                mLoadedAntennaCache[key].RemoveAt(instance_id);
-                if (mLoadedAntennaCache[key].Count == 0)
+                if (loadedAntennaCache[key].Count == 0)
                 {
-                    mLoadedAntennaCache.Remove(key);
+                    RegisterProtos(antenna.Vessel);
+                    loadedAntennaCache.Remove(key);
                 }
+                antenna.Destroyed -= Unregister;
                 OnUnregister(antenna);
             }
         }
 
-        public void RegisterProtos(Vessel v)
+        /// <summary>
+        /// Registers ProtoAntennas for every ProtoPartModuleSnapshot that is detected to be an antenna. Used for inactive/unloaded crafts.
+        /// </summary>
+        /// <param name="vessel">The vessel</param>
+        public void RegisterProtos(Vessel vessel)
         {
-            Guid key = v.id;
-            RTLog.Notify("AntennaManager: RegisterProtos({0}, {1})", v.vesselName, key);
+            var key = vessel.id;
+            RTLog.Notify("AntennaManager: RegisterProtos({0}, {1})", vessel.vesselName, key);
 
-            if (mLoadedAntennaCache.ContainsKey(key)) return;
+            // Loading ProtoAntennas has no point if there are still real antennas loaded; they take precedence.
+            if (loadedAntennaCache.ContainsKey(key)) return;
 
-            foreach (ProtoPartSnapshot pps in v.protoVessel.protoPartSnapshots)
+            // Get rid of any old instances.
+            UnregisterProtos(vessel);
+
+            // Iterate over the ProtoPartModuleSnapshots and find the antennas. Register them.
+            foreach (ProtoPartSnapshot pps in vessel.protoVessel.protoPartSnapshots)
             {
                 foreach (ProtoPartModuleSnapshot ppms in pps.modules.Where(ppms => ppms.IsAntenna()))
                 {
-                    if (!mProtoAntennaCache.ContainsKey(key))
+                    if (!protoAntennaCache.ContainsKey(key))
                     {
-                        mProtoAntennaCache[key] = new List<IAntenna>();
+                        protoAntennaCache[key] = new List<IVesselAntenna>();
                     }
-                    ProtoAntenna proto = new ProtoAntenna(v, pps, ppms);
-                    mProtoAntennaCache[key].Add(proto);
+                    ProtoAntenna proto = new ProtoAntenna(vessel, pps, ppms);
+                    protoAntennaCache[key].Add(proto);
                     OnRegister(proto);
                 }
             }
         }
 
-        public void UnregisterProtos(Guid key)
+        /// <summary>
+        /// Unregisters any ProtoAntennas attached to a specific vessel.
+        /// </summary>
+        /// <param name="vesel">The key.</param>
+        public void UnregisterProtos(Vessel vessel)
         {
-            RTLog.Notify("AntennaManager: UnregisterProtos({0})", key);
+            RTLog.Notify("AntennaManager: UnregisterProtos({0})", vessel);
 
-            if (!mProtoAntennaCache.ContainsKey(key)) return;
+            Guid key = vessel.id;
+            if (!protoAntennaCache.ContainsKey(key)) return;
 
-            foreach (IAntenna a in mProtoAntennaCache[key])
+            // Fire events for all ProtoAntennas.
+            foreach (IVesselAntenna a in protoAntennaCache[key])
             {
                 OnUnregister.Invoke(a);
             }
 
-            mProtoAntennaCache.Remove(key);
+            protoAntennaCache.Remove(key);
         }
 
-        private IEnumerable<IAntenna> For(Guid key)
+        /* External Call */
+        public void OnFixedUpdate()
         {
-            if (mLoadedAntennaCache.ContainsKey(key))
+            foreach (var pair in loadedAntennaCache.ToList())
             {
-                return mLoadedAntennaCache[key];
-            }
-            if (mProtoAntennaCache.ContainsKey(key))
-            {
-                return mProtoAntennaCache[key];
-            }
-            return Enumerable.Empty<IAntenna>();
-        }
-
-        private void OnVesselGoOnRails(Vessel v)
-        {
-            if (v.parts.Count == 0)
-            {
-                RegisterProtos(v);
+                foreach (var antenna in pair.Value.ToList())
+                {
+                    if (antenna.Guid != pair.Key)
+                    {
+                        Unregister(pair.Key, antenna);
+                        Register(antenna);
+                    }
+                }
             }
         }
 
-        public IEnumerator<IAntenna> GetEnumerator()
+        private void OnVesselAntennaDestroy(IVesselAntenna antenna)
         {
-            return mLoadedAntennaCache.Values.SelectMany(l => l).Concat(
-                   mProtoAntennaCache.Values.SelectMany(l => l)).GetEnumerator();
+            Unregister(antenna);
+        }
+
+        private IEnumerable<IVesselAntenna> For(Guid key)
+        {
+            if (loadedAntennaCache.ContainsKey(key))
+            {
+                return loadedAntennaCache[key];
+            }
+            if (protoAntennaCache.ContainsKey(key))
+            {
+                return protoAntennaCache[key];
+            }
+            return Enumerable.Empty<IVesselAntenna>();
+        }
+
+        public IEnumerator<IVesselAntenna> GetEnumerator()
+        {
+            return loadedAntennaCache.Values.SelectMany(l => l).Concat(
+                   protoAntennaCache.Values.SelectMany(l => l)).GetEnumerator();
         }
 
         IEnumerator IEnumerable.GetEnumerator()
         {
             return GetEnumerator();
-        }
-    }
-
-    public static partial class RTUtil
-    {
-        public static bool IsAntenna(this ProtoPartModuleSnapshot ppms)
-        {
-            return ppms.GetBool("IsRTAntenna") &&
-                   ppms.GetBool("IsRTPowered") &&
-                   ppms.GetBool("IsRTActive");
-        }
-
-        public static bool IsAntenna(this PartModule pm)
-        {
-            return pm.Fields.GetValue<bool>("IsRTAntenna") &&
-                   pm.Fields.GetValue<bool>("IsRTPowered") &&
-                   pm.Fields.GetValue<bool>("IsRTActive");
         }
     }
 }

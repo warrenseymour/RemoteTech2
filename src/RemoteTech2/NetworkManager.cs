@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -7,61 +8,104 @@ using UnityEngine;
 
 namespace RemoteTech
 {
-    [Flags]
-    public enum RangeModel
+    using AdjacencyTable = Dictionary<ISatellite, AdjacencyMap>;
+    using ConnectionTable = Dictionary<ISatellite, ConnectionMap>;
+    public class NetworkManager : IEnumerable<ISatellite>
     {
-        Standard,
-        Additive,
-        Root = Additive,
-    }
+        /// <summary>
+        /// Triggers when an edge is added to the network graph.
+        /// </summary>
+        public event Action<NetworkLink<ISatellite>> LinkAdded = delegate { };
+        /// <summary>
+        /// Triggers when an edge is removed from the network graph.
+        /// </summary>
+        public event Action<NetworkLink<ISatellite>> LinkRemoved = delegate { };
 
-    public partial class NetworkManager : IEnumerable<ISatellite>
-    {
-        public event Action<ISatellite, NetworkLink<ISatellite>> OnLinkAdd = delegate { };
-        public event Action<ISatellite, NetworkLink<ISatellite>> OnLinkRemove = delegate { };
+        /// <summary>
+        /// Triggers when a connection is added.
+        /// </summary>
+        public event Action<ISatellite, ISatellite> ConnectionAdded = delegate { };
+        /// <summary>
+        /// Triggers when a connection is removed.
+        /// </summary>
+        public event Action<ISatellite, ISatellite> ConnectionRemoved = delegate { };
 
+        /// <summary>
+        /// A dictionary of KSP's CelestialBodies with their assigned Guids.
+        /// </summary>
         public Dictionary<Guid, CelestialBody> Planets { get; private set; }
-        public Dictionary<Guid, ISatellite> GroundStations { get; private set; }
-        public Dictionary<Guid, List<NetworkLink<ISatellite>>> Graph { get; private set; }
 
+        /// <summary>
+        /// A dictionary of the Ground Stations as defined in the configuration file.
+        /// </summary>
+        public Dictionary<Guid, ISatellite> GroundStations { get; private set; }
+        /// <summary>
+        /// The network graph as an adjacency list. Describes the satellite's neighbours by outgoing NetworkLink.
+        public AdjacencyTable Graph { get; private set; }
+
+        /// <summary>
+        /// The total amount of satellites in the current network.
+        /// </summary>
         public int Count { get { return RTCore.Instance.Satellites.Count + GroundStations.Count; } }
 
-        public static Guid ActiveVesselGuid = new Guid(RTSettings.Instance.ActiveVesselGuid);
+        public IRangeModel RangeModel { get; set; }
+        public NetworkPathfinder<ISatellite> PathFinder { get; private set; }
 
+        /// <summary>
+        /// Gets the <see cref="ISatellite"/> with the specified Guid.
+        /// </summary>
+        /// <value>
+        /// The <see cref="ISatellite"/>. Returns null if there is no satellite with the specified identifier.
+        /// </value>
+        /// <param name="guid">The unique identifier.</param>
+        /// <returns></returns>
         public ISatellite this[Guid guid]
         {
             get
             {
+                ISatellite gs;
                 return RTCore.Instance.Satellites[guid] ??
-                       ((guid == ActiveVesselGuid) ? RTCore.Instance.Satellites[FlightGlobals.ActiveVessel] : null) ??
-                       (GroundStations.ContainsKey(guid) ? GroundStations[guid] : null);
+                       (GroundStations.TryGetValue(guid, out gs) ? gs : null);
             }
         }
 
-        public List<NetworkRoute<ISatellite>> this[ISatellite sat]
+        /// <summary>
+        /// Retrieves all cached connections (start -> finish) of the specified satellite.
+        /// </summary>
+        /// <value>
+        /// Returns an empty dictionary if no connections exist.
+        /// </value>
+        /// <param name="sat">The satellite. May be null.</param>
+        /// <returns>All cached connections as a dictionary.</returns>
+        public ConnectionMap this[ISatellite sat]
         {
             get
             {
-                if (sat == null) return new List<NetworkRoute<ISatellite>>();
-                return mConnectionCache.ContainsKey(sat) ? mConnectionCache[sat] : new List<NetworkRoute<ISatellite>>();
+                ConnectionMap result;
+                return (sat != null && connectionCache.TryGetValue(sat, out result)) 
+                    ? result 
+                    : new ConnectionMap();
             }
         }
 
-        private const int REFRESH_TICKS = 50;
+        private const int TotalRefreshTicks = 100;
 
-        private int mTick;
-        private int mTickIndex;
-        private Dictionary<ISatellite, List<NetworkRoute<ISatellite>>> mConnectionCache = new Dictionary<ISatellite, List<NetworkRoute<ISatellite>>>();
+        private int currentTick;
+        private int currentIndex;
+        private readonly ConnectionTable connectionCache = new ConnectionTable();
 
         public NetworkManager()
         {
-            Graph = new Dictionary<Guid, List<NetworkLink<ISatellite>>>();
+            Graph = new AdjacencyTable();
+            PathFinder = new NetworkPathfinder<ISatellite>(FindNeighbors, RangeModelExtensions.DistanceTo);
+            RangeModel = RangeModelBuilder.Create(RTSettings.Instance.RangeModelType);
 
             // Load all planets into a dictionary;
             Planets = new Dictionary<Guid, CelestialBody>();
-            foreach (CelestialBody cb in FlightGlobals.Bodies)
+            foreach (var cb in FlightGlobals.Bodies)
             {
-                Planets[cb.Guid()] = cb;
+                var cbAsSat = cb.AsSatellite();
+                Planets[cbAsSat.Guid] = cb;
             }
 
             // Load all ground stations into a dictionary;
@@ -73,123 +117,133 @@ namespace RemoteTech
                     GroundStations.Add(sat.Guid, sat);
                     OnSatelliteRegister(sat);
                 }
-                catch (Exception e) // Already exists.
+                catch (ArgumentException e) // Already exists.
                 {
                     RTLog.Notify("A ground station cannot be loaded: " + e.Message);
                 }
             }
 
+            // Events
             RTCore.Instance.Satellites.OnRegister += OnSatelliteRegister;
             RTCore.Instance.Satellites.OnUnregister += OnSatelliteUnregister;
-            RTCore.Instance.OnPhysicsUpdate += OnPhysicsUpdate;
         }
 
         public void Dispose()
         {
             if (RTCore.Instance != null)
             {
-                RTCore.Instance.OnPhysicsUpdate -= OnPhysicsUpdate;
                 RTCore.Instance.Satellites.OnRegister -= OnSatelliteRegister;
                 RTCore.Instance.Satellites.OnUnregister -= OnSatelliteUnregister;
             }
         }
 
-        public void FindPath(ISatellite start, IEnumerable<ISatellite> commandStations)
+        private void UpdateConnections(ISatellite commandStation)
         {
-            var paths = new List<NetworkRoute<ISatellite>>();
-            foreach (ISatellite root in commandStations.Concat(GroundStations.Values).Where(r => r != start))
+            var connections = PathFinder.GenerateConnections(commandStation);
+            foreach (var satellite in this)
             {
-                paths.Add(NetworkPathfinder.Solve(start, root, FindNeighbors, RangeModelExtensions.DistanceTo, RangeModelExtensions.DistanceTo));
-            }
-            mConnectionCache[start] = paths.Where(p => p.Exists).ToList();
-            mConnectionCache[start].Sort((a, b) => a.Delay.CompareTo(b.Delay));
-            start.OnConnectionRefresh(this[start]);
-        }
-
-        public IEnumerable<NetworkLink<ISatellite>> FindNeighbors(ISatellite s)
-        {
-            if (!s.Powered) return Enumerable.Empty<NetworkLink<ISatellite>>();
-            return Graph[s.Guid].Where(l => l.Target.Powered);
-        }
-
-        private void UpdateGraph(ISatellite a)
-        {
-            var result = new List<NetworkLink<ISatellite>>();
-
-            foreach (ISatellite b in this)
-            {
-                var link = GetLink(a, b);
-                if (link == null) continue;
-                result.Add(link);
-            }
-
-            // Send events for removed edges
-            foreach (var link in Graph[a.Guid].Except(result))
-            {
-                OnLinkRemove(a, link);
-            }
-
-            Graph[a.Guid].Clear();
-
-            // Input new edges
-            foreach (var link in result)
-            {
-                Graph[a.Guid].Add(link);
-                OnLinkAdd(a, link);
-            }
-        }
-
-        public static NetworkLink<ISatellite> GetLink(ISatellite sat_a, ISatellite sat_b)
-        {
-            if (sat_a == null || sat_b == null || sat_a == sat_b) return null;
-            bool los = sat_a.HasLineOfSightWith(sat_b) || CheatOptions.InfiniteEVAFuel;
-            if (!los) return null;
-
-            switch (RTSettings.Instance.RangeModelType)
-            {
-                default:
-                case RangeModel.Standard: // Stock range model
-                    return RangeModelStandard.GetLink(sat_a, sat_b);
-                case RangeModel.Additive: // NathanKell
-                    return RangeModelRoot.GetLink(sat_a, sat_b);
-            }
-        }
-
-        public void OnPhysicsUpdate()
-        {
-            var count = RTCore.Instance.Satellites.Count;
-            if (count == 0) return;
-            int baseline = (count / REFRESH_TICKS);
-            int takeCount = baseline + (((mTick++ % REFRESH_TICKS) < (count - baseline * REFRESH_TICKS)) ? 1 : 0);
-            IEnumerable<ISatellite> commandStations = RTCore.Instance.Satellites.FindCommandStations();
-            foreach (VesselSatellite s in RTCore.Instance.Satellites.Concat(RTCore.Instance.Satellites).Skip(mTickIndex).Take(takeCount))
-            {
-                UpdateGraph(s);
-                //("{0} [ E: {1} ]", s.ToString(), Graph[s.Guid].ToDebugString());
-                if (s.SignalProcessor.VesselLoaded || HighLogic.LoadedScene == GameScenes.TRACKSTATION)
+                NetworkRoute<ISatellite> connection;
+                if (connections.TryGetValue(satellite, out connection))
                 {
-                    FindPath(s, commandStations);
+                    bool contains = connectionCache[satellite].ContainsKey(commandStation);
+                    connectionCache[satellite][commandStation] = connection;
+                    if (!contains) ConnectionAdded.Invoke(satellite, commandStation);
+                }
+                else
+                {
+                    if (connectionCache[satellite].Remove(commandStation))
+                        ConnectionRemoved.Invoke(satellite, commandStation);
                 }
             }
-            mTickIndex += takeCount;
-            mTickIndex = mTickIndex % RTCore.Instance.Satellites.Count;
+        }
+
+        private IEnumerable<NetworkLink<ISatellite>> FindNeighbors(ISatellite sat_a)
+        {
+            if (!sat_a.Powered) return Enumerable.Empty<NetworkLink<ISatellite>>();
+            return Graph[sat_a].Values;
+        }
+
+        private NetworkLink<ISatellite> GetLink(ISatellite a, ISatellite b)
+        {
+            if (a == null || b == null || a == b) return null;
+            if (!a.HasLineOfSightWith(b) && !CheatOptions.InfiniteEVAFuel) return null;
+
+            return RangeModel.GetLink(a, b);
+        }
+
+        private void UpdateGraph(ISatellite a, ISatellite b)
+        {
+            var link = GetLink(a, b);
+            bool contains = Graph[a].ContainsKey(b) || Graph[b].ContainsKey(a);
+            if (link == null)
+            {
+                if (!contains) return;
+                Graph[a].Remove(b);
+                Graph[b].Remove(a);
+                LinkRemoved(NetworkLink.Empty(a, b));
+            }
+            else
+            {
+                Graph[a][b] = link;
+                Graph[b][a] = link.Invert();
+                if (!contains) LinkAdded(link);
+            }
+        }
+
+        private void UpdateGraph()
+        {
+            var source = RTCore.Instance.Network;
+            var count = source.Count * source.Count - source.Count;
+            if (count == 0) return;
+            int baseline = (count / TotalRefreshTicks);
+            int takeCount = baseline + (((currentTick++ % TotalRefreshTicks) < (count - baseline * TotalRefreshTicks)) ? 1 : 0);
+            var commandStations = RTCore.Instance.Satellites.FindCommandStations().Concat(GroundStations.Values);
+            foreach (var a in source.WrapAround().Skip(currentIndex).Take(takeCount))
+            {
+                // Update Graph
+                foreach (var b in source)
+                {
+                    // This skips pairs of XX or wrong lexicographic ordering (process XY but not YX, so all non-repeating combinations).
+                    if (b == a) break;
+                    UpdateGraph(a, b);
+                }
+
+                // TODO: Make a lookup table for command stations.
+                if (GroundStations.ContainsKey(a.Guid) || commandStations.Contains(a))
+                {
+                    UpdateConnections(a);
+                }
+            }
+
+            currentIndex += takeCount;
+            currentIndex = currentIndex % count;
+        }
+
+        public void OnFixedUpdate()
+        {
+            UpdateGraph();
         }
 
         private void OnSatelliteUnregister(ISatellite s)
         {
             RTLog.Notify("NetworkManager: SatelliteUnregister({0})", s);
-            Graph.Remove(s.Guid);
-            foreach (var list in Graph.Values)
+            Graph.Remove(s);
+            foreach (var pair in Graph)
             {
-                list.RemoveAll(l => l.Target == s);
+                if (pair.Value.Remove(s)) LinkRemoved(NetworkLink.Empty(pair.Key, s));
             }
-            mConnectionCache.Remove(s);
+            connectionCache.Remove(s);
+            foreach (var pair in connectionCache)
+            {
+                if (pair.Value.Remove(s)) ConnectionRemoved.Invoke(pair.Key, s);
+            }
         }
 
         private void OnSatelliteRegister(ISatellite s)
         {
             RTLog.Notify("NetworkManager: SatelliteRegister({0})", s);
-            Graph[s.Guid] = new List<NetworkLink<ISatellite>>();
+            Graph[s] = new AdjacencyMap();
+            connectionCache[s] = new ConnectionMap();
         }
 
         public IEnumerator<ISatellite> GetEnumerator()
@@ -217,16 +271,16 @@ namespace RemoteTech
         bool ISatellite.Powered { get { return true; } }
         bool ISatellite.Visible { get { return true; } }
         String ISatellite.Name { get { return Name; } set { Name = value; } }
-        Guid ISatellite.Guid { get { return mGuid; } }
+        Guid ISatellite.Guid { get { return guid; } }
+        Group ISatellite.Group { get { return Group.Empty; } set { } }
         Vector3d ISatellite.Position { get { return FlightGlobals.Bodies[Body].GetWorldSurfacePosition(Latitude, Longitude, Height); } }
         bool ISatellite.IsCommandStation { get { return true; } }
         bool ISatellite.HasLocalControl { get { return false; } }
         CelestialBody ISatellite.Body { get { return FlightGlobals.Bodies[Body]; } }
         IEnumerable<IAntenna> ISatellite.Antennas { get { return Antennas; } }
 
-        void ISatellite.OnConnectionRefresh(List<NetworkRoute<ISatellite>> route) { }
-
-        private Guid mGuid;
+        private Guid guid;
+        private int hash;
 
         void IPersistenceLoad.PersistenceLoad()
         {
@@ -234,7 +288,13 @@ namespace RemoteTech
             {
                 antenna.Parent = this;
             }
-            mGuid = new Guid(Guid);
+            this.guid = new Guid(Guid);
+            this.hash = guid.GetHashCode();
+        }
+
+        public override int GetHashCode()
+        {
+            return hash;
         }
 
         public override String ToString()

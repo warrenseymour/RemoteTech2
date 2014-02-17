@@ -2,12 +2,26 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using UnityEngine;
 
 namespace RemoteTech
 {
-    public struct CachedField<T>
+    public class CachedField<T>
     {
-        public T Field;
-        public int Frame;
+        private T field;
+        private int frame;
+
+        public T Cache(Func<T> getter)
+        {
+            if (frame != Time.frameCount)
+            {
+                frame = Time.frameCount;
+                return field = getter();
+            }
+            else
+            {
+                return field;
+            }
+        }
     }
 }

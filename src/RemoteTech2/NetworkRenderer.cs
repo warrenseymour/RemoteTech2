@@ -29,20 +29,14 @@ namespace RemoteTech
             } 
         }
 
-        private static Texture2D mTexMark;
-        private HashSet<BidirectionalEdge<ISatellite>> mEdges = new HashSet<BidirectionalEdge<ISatellite>>();
-        private List<NetworkLine> mLines = new List<NetworkLine>();
-        private List<NetworkCone> mCones = new List<NetworkCone>();
+        private HashSet<NetworkLink<ISatellite>> edgeMap = new HashSet<NetworkLink<ISatellite>>();
+        private List<NetworkLine> lines = new List<NetworkLine>();
+        private List<NetworkCone> cones = new List<NetworkCone>();
 
         public bool ShowOmni { get { return (Filter & MapFilter.Omni) == MapFilter.Omni; } }
         public bool ShowDish { get { return (Filter & MapFilter.Dish) == MapFilter.Dish; } }
         public bool ShowPath { get { return (Filter & MapFilter.Path) == MapFilter.Path; } }
         public bool ShowPlanet { get { return (Filter & MapFilter.Planet) == MapFilter.Planet; } }
-
-        static NetworkRenderer()
-        {
-            RTUtil.LoadImage(out mTexMark, "mark.png");
-        }
 
         public static NetworkRenderer CreateAndAttach()
         {
@@ -53,8 +47,8 @@ namespace RemoteTech
             }
 
             renderer = MapView.MapCamera.gameObject.AddComponent<NetworkRenderer>();
-            RTCore.Instance.Network.OnLinkAdd += renderer.OnLinkAdd;
-            RTCore.Instance.Network.OnLinkRemove += renderer.OnLinkRemove;
+            RTCore.Instance.Network.LinkAdded += renderer.OnLinkAdd;
+            RTCore.Instance.Network.LinkRemoved += renderer.OnLinkRemove;
             RTCore.Instance.Satellites.OnUnregister += renderer.OnSatelliteUnregister;
             return renderer;
         }
@@ -78,101 +72,115 @@ namespace RemoteTech
                     if (MapView.MapCamera.transform.InverseTransformPoint(world_pos).z < 0f) continue;
                     Vector3 pos = MapView.MapCamera.camera.WorldToScreenPoint(world_pos);
                     Rect screenRect = new Rect((pos.x - 8), (Screen.height - pos.y) - 8, 16, 16);
-                    Graphics.DrawTexture(screenRect, mTexMark, 0, 0, 0, 0);
+                    Graphics.DrawTexture(screenRect, Textures.Mark, 0, 0, 0, 0);
                 }
             }
         }
 
         private void UpdateNetworkCones()
         {
-            var antennas = (ShowPlanet ? RTCore.Instance.Antennas.Where(a => a.Powered && a.CanTarget && RTCore.Instance.Satellites[a.Guid] != null
-                                                                                       && RTCore.Instance.Network.Planets.ContainsKey(a.Target))
-                                       : Enumerable.Empty<IAntenna>()).ToList();
-            int oldLength = mCones.Count;
-            int newLength = antennas.Count;
+            var targets = new List<KeyValuePair<IAntenna, ISatellite>>(100);
+            if (ShowPlanet)
+            {
+                foreach (var antenna in RTCore.Instance.Antennas)
+                {
+                    if (!antenna.Powered || !antenna.CanTarget) continue;
+                    foreach (var target in antenna.Targets)
+                    {
+                        if (target.IsMultiple) continue;
+                        foreach (var satellite in target)
+                        {
+                            targets.Add(new KeyValuePair<IAntenna, ISatellite>(antenna, satellite));
+                        }
+                    }
+                }
+            }
+
+            int oldLength = cones.Count;
+            int newLength = targets.Count;
 
             // Free any unused lines
             for (int i = newLength; i < oldLength; i++)
             {
-                GameObject.Destroy(mCones[i]);
-                mCones[i] = null;
+                GameObject.Destroy(cones[i]);
+                cones[i] = null;
             }
-            mCones.RemoveRange(Math.Min(oldLength, newLength), Math.Max(oldLength - newLength, 0));
-            mCones.AddRange(Enumerable.Repeat((NetworkCone) null, Math.Max(newLength - oldLength, 0)));
+            cones.RemoveRange(Math.Min(oldLength, newLength), Math.Max(oldLength - newLength, 0));
+            cones.AddRange(Enumerable.Repeat((NetworkCone) null, Math.Max(newLength - oldLength, 0)));
 
             for (int i = 0; i < newLength; i++)
             {
-                mCones[i] = mCones[i] ?? NetworkCone.Instantiate();
-                mCones[i].Material = MapView.fetch.orbitLinesMaterial;
-                mCones[i].LineWidth = 2.0f;
-                mCones[i].Antenna = antennas[i];
-                mCones[i].Planet = RTCore.Instance.Network.Planets[antennas[i].Target];
-                mCones[i].Color = Color.gray;
-                mCones[i].Active = ShowPlanet;
+                cones[i] = cones[i] ?? NetworkCone.Instantiate();
+                cones[i].Material = MapView.fetch.orbitLinesMaterial;
+                cones[i].LineWidth = 2.0f;
+                cones[i].Antenna = targets[i].Key;
+                cones[i].Target = targets[i].Value;
+                cones[i].Color = Color.gray;
+                cones[i].Active = ShowPlanet;
             }
         }
 
         private void UpdateNetworkEdges()
         {
-            var edges = mEdges.Where(e => CheckVisibility(e)).ToList();
-            int oldLength = mLines.Count;
+            var edges = edgeMap.Where(e => CheckVisibility(e)).ToList();
+            int oldLength = lines.Count;
             int newLength = edges.Count;
 
             // Free any unused lines
             for (int i = newLength; i < oldLength; i++)
             {
-                GameObject.Destroy(mLines[i]);
-                mLines[i] = null;
+                GameObject.Destroy(lines[i]);
+                lines[i] = null;
             }
-            mLines.RemoveRange(Math.Min(oldLength, newLength), Math.Max(oldLength - newLength, 0));
-            mLines.AddRange(Enumerable.Repeat<NetworkLine>(null, Math.Max(newLength - oldLength, 0)));
+            lines.RemoveRange(Math.Min(oldLength, newLength), Math.Max(oldLength - newLength, 0));
+            lines.AddRange(Enumerable.Repeat<NetworkLine>(null, Math.Max(newLength - oldLength, 0)));
 
             // Iterate over all satellites, updating or creating new lines.
             var it = edges.GetEnumerator();
             for (int i = 0; i < newLength; i++)
             {
                 it.MoveNext();
-                mLines[i] = mLines[i] ?? NetworkLine.Instantiate();
-                mLines[i].Material = MapView.fetch.orbitLinesMaterial;
-                mLines[i].LineWidth = 3.0f;
-                mLines[i].Edge = it.Current;
-                mLines[i].Color = CheckColor(it.Current);
-                mLines[i].Active = true;
+                lines[i] = lines[i] ?? NetworkLine.Instantiate();
+                lines[i].Material = MapView.fetch.orbitLinesMaterial;
+                lines[i].LineWidth = 3.0f;
+                lines[i].Edge = it.Current;
+                lines[i].Color = CheckColor(it.Current);
+                lines[i].Active = true;
             }
         }
 
-        private bool CheckVisibility(BidirectionalEdge<ISatellite> edge)
+        private bool CheckVisibility(NetworkLink<ISatellite> edge)
         {
             var vessel = PlanetariumCamera.fetch.target.vessel;
             var satellite = RTCore.Instance.Satellites[vessel];
+
+            if (edge.A.Visible && edge.B.Visible)
+            {
+                if (edge.LinkType == LinkType.Omni && ShowOmni) return true;
+                if (edge.LinkType == LinkType.Dish && ShowDish) return true;
+            }
             if (satellite != null && ShowPath)
             {
                 var connections = RTCore.Instance.Network[satellite];
-                if (connections.Any() && connections[0].Contains(edge))
+                if (connections.Any() && connections.ShortestDelay().Contains(edge))
                     return true;
             }
-            if (edge.Type == LinkType.Omni && !ShowOmni)
-                return false;
-            if (edge.Type == LinkType.Dish && !ShowDish)
-                return false;
-            if (!edge.A.Visible || !edge.B.Visible)
-                return false;
-            return true;
+            return false;
         }
 
-        private Color CheckColor(BidirectionalEdge<ISatellite> edge)
+        private Color CheckColor(NetworkLink<ISatellite> edge)
         {
             var vessel = PlanetariumCamera.fetch.target.vessel;
             var satellite = RTCore.Instance.Satellites[vessel];
             if (satellite != null && ShowPath)
             {
                 var connections = RTCore.Instance.Network[satellite];
-                if (connections.Any() && connections[0].Contains(edge))
+                if (connections.Any() && connections.ShortestDelay().Contains(edge))
                     return RTSettings.Instance.ActiveConnectionColor;
             }
-            if (edge.Type == LinkType.Omni)
+            if (edge.LinkType == LinkType.Omni)
                 return RTSettings.Instance.OmniConnectionColor;
-            if (edge.Type == LinkType.Dish)
+            if (edge.LinkType == LinkType.Dish)
                 return RTSettings.Instance.DishConnectionColor;
 
             return XKCDColors.Grey;
@@ -180,38 +188,38 @@ namespace RemoteTech
 
         private void OnSatelliteUnregister(ISatellite s)
         {
-            mEdges.RemoveWhere(e => e.A == s || e.B == s);
+            edgeMap.RemoveWhere(e => e.A == s || e.B == s);
         }
 
-        private void OnLinkAdd(ISatellite a, NetworkLink<ISatellite> link)
+        private void OnLinkAdd(NetworkLink<ISatellite> link)
         {
-            mEdges.Add(new BidirectionalEdge<ISatellite>(a, link.Target, link.Port));
+            edgeMap.Add(link);
         }
 
-        private void OnLinkRemove(ISatellite a, NetworkLink<ISatellite> link)
+        private void OnLinkRemove(NetworkLink<ISatellite> link)
         {
-            mEdges.Remove(new BidirectionalEdge<ISatellite>(a, link.Target, link.Port));
+            edgeMap.Remove(link);
         }
 
         public void Detach()
         {
-            for (int i = 0; i < mLines.Count; i++)
+            for (int i = 0; i < lines.Count; i++)
             {
-                GameObject.DestroyImmediate(mLines[i]);
+                GameObject.DestroyImmediate(lines[i]);
             }
-            mLines.Clear();
-            for (int i = 0; i < mCones.Count; i++)
+            lines.Clear();
+            for (int i = 0; i < cones.Count; i++)
             {
-                GameObject.DestroyImmediate(mCones[i]);
+                GameObject.DestroyImmediate(cones[i]);
             }
-            mCones.Clear();
+            cones.Clear();
             DestroyImmediate(this);
         }
 
         public void OnDestroy()
         {
-            RTCore.Instance.Network.OnLinkAdd -= OnLinkAdd;
-            RTCore.Instance.Network.OnLinkRemove -= OnLinkRemove;
+            RTCore.Instance.Network.LinkAdded -= OnLinkAdd;
+            RTCore.Instance.Network.LinkRemoved -= OnLinkRemove;
             RTCore.Instance.Satellites.OnUnregister -= OnSatelliteUnregister;
         }
     }

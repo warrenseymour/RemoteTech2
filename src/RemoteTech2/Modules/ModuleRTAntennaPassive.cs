@@ -8,8 +8,9 @@ using UnityEngine;
 namespace RemoteTech
 {
     [KSPModule("Technology Perk")]
-    public class ModuleRTAntennaPassive : PartModule, IAntenna
+    public class ModuleRTAntennaPassive : PartModule, IVesselAntenna
     {
+        public event Action<IVesselAntenna> Destroyed = delegate { };
         public String Name { get { return part.partInfo.title; } }
         public Guid Guid { get { return vessel.id; } }
         public bool Powered { get { return Activated; } }
@@ -17,13 +18,13 @@ namespace RemoteTech
         public bool Animating { get { return false; } }
 
         public bool CanTarget { get { return false; } }
-        public Guid Target { get { return Guid.Empty; } set { return; } }
-
+        public IList<Target> Targets { get { return new Target[0]; } set { return; } }
         public float Dish { get { return -1.0f; } }
         public double Radians { get { return 1.0f; } }
         public float Omni { get { return Activated ? OmniRange * RangeMultiplier : 0.0f; } }
         public float Consumption { get { return 0.0f; } }
         public Vector3d Position { get { return vessel.GetWorldPos3D(); } }
+        public Vessel Vessel { get { return vessel; } }
 
         private float RangeMultiplier { get { return RTSettings.Instance.RangeMultiplier; } }
         private bool Unlocked { get { return ResearchAndDevelopment.GetTechnologyState(TechRequired) == RDTech.State.Available || TechRequired.Equals("None"); } }
@@ -59,17 +60,8 @@ namespace RemoteTech
             RTOmniRange = 0.0f,
             RTDishRange = -1.0f;
 
-        [KSPField] // Persistence handled by Save()
-        public Guid RTAntennaTarget = Guid.Empty;
-
-        public int[] mDeployFxModuleIndices, mProgressFxModuleIndices;
-        private List<IScalarModule> mDeployFxModules = new List<IScalarModule>();
-        private List<IScalarModule> mProgressFxModules = new List<IScalarModule>();
-        public ConfigNode mTransmitterConfig;
-        private IScienceDataTransmitter mTransmitter;
-
-        private Guid mRegisteredId;
-
+        public ConfigNode transmitterConfig;
+        private IScienceDataTransmitter transmitter;
         public override string GetInfo()
         {
             var info = new StringBuilder();
@@ -84,15 +76,19 @@ namespace RemoteTech
         public virtual void SetState(bool state)
         {
             IsRTActive = state;
-            var satellite = RTCore.Instance.Network[Guid];
-            bool route_home = RTCore.Instance.Network[satellite].Any(r => r.Links[0].Interfaces.Contains(this) && RTCore.Instance.Network.GroundStations.ContainsKey(r.Goal.Guid));
-            if (mTransmitter == null && route_home)
+
+            if (RTCore.Instance != null)
             {
-                AddTransmitter();
-            }
-            else if (!route_home && mTransmitter != null)
-            {
-                RemoveTransmitter();
+                var satellite = RTCore.Instance.Network[Guid];
+                bool routeToKSC = RTCore.Instance.Network[satellite].ConnectedToKSC();
+                if (transmitter == null && routeToKSC)
+                {
+                    AddTransmitter();
+                }
+                else if (!routeToKSC && transmitter != null)
+                {
+                    RemoveTransmitter();
+                }
             }
         }
 
@@ -107,8 +103,8 @@ namespace RemoteTech
             if (node.HasNode("TRANSMITTER"))
             {
                 RTLog.Notify("ModuleRTAntennaPassive: Found TRANSMITTER block.");
-                mTransmitterConfig = node.GetNode("TRANSMITTER");
-                mTransmitterConfig.AddValue("name", "ModuleRTDataTransmitter");
+                transmitterConfig = node.GetNode("TRANSMITTER");
+                transmitterConfig.AddValue("name", "ModuleRTDataTransmitter");
             }
         }
 
@@ -116,10 +112,7 @@ namespace RemoteTech
         {
             if (RTCore.Instance != null)
             {
-                GameEvents.onVesselWasModified.Add(OnVesselModified);
-                GameEvents.onPartUndock.Add(OnPartUndock);
-                mRegisteredId = vessel.id;
-                RTCore.Instance.Antennas.Register(vessel.id, this);
+                RTCore.Instance.Antennas.Register(this);
                 SetState(true);
                 GUI_OmniRange = RTUtil.FormatSI(Omni, "m");
             }
@@ -135,17 +128,17 @@ namespace RemoteTech
 
         private void AddTransmitter()
         {
-            if (mTransmitterConfig == null || !mTransmitterConfig.HasValue("name")) return;
+            if (transmitterConfig == null || !transmitterConfig.HasValue("name")) return;
             var transmitters = part.FindModulesImplementing<IScienceDataTransmitter>();
             if (transmitters.Count > 0)
             {
                 RTLog.Notify("ModuleRTAntennaPassive: Find TRANSMITTER success.");
-                mTransmitter = transmitters.First();
+                transmitter = transmitters.First();
             }
             else
             {
                 var copy = new ConfigNode();
-                mTransmitterConfig.CopyTo(copy);
+                transmitterConfig.CopyTo(copy);
                 part.AddModule(copy);
                 AddTransmitter();
                 RTLog.Notify("ModuleRTAntennaPassive: Add TRANSMITTER success.");
@@ -155,9 +148,9 @@ namespace RemoteTech
         private void RemoveTransmitter()
         {
             RTLog.Notify("ModuleRTAntennaPassive: Remove TRANSMITTER success.");
-            if (mTransmitter == null) return;
-            part.RemoveModule((PartModule) mTransmitter);
-            mTransmitter = null;
+            if (transmitter == null) return;
+            part.RemoveModule((PartModule) transmitter);
+            transmitter = null;
         }
 
         private List<IScalarModule> FindFxModules(int[] indices, bool showUI)
@@ -184,31 +177,7 @@ namespace RemoteTech
         private void OnDestroy()
         {
             RTLog.Notify("ModuleRTAntennaPassive: OnDestroy");
-            GameEvents.onVesselWasModified.Remove(OnVesselModified);
-            GameEvents.onPartUndock.Remove(OnPartUndock);
-            if (RTCore.Instance != null && mRegisteredId != Guid.Empty)
-            {
-                RTCore.Instance.Antennas.Unregister(mRegisteredId, this);
-                mRegisteredId = Guid.Empty;
-            }
-        }
-
-        private void OnPartUndock(Part p)
-        {
-            if (p.vessel == vessel)
-            {
-                OnVesselModified(p.vessel);
-            } 
-        }
-
-        private void OnVesselModified(Vessel v)
-        {
-            if ((mRegisteredId != vessel.id))
-            {
-                RTCore.Instance.Antennas.Unregister(mRegisteredId, this);
-                mRegisteredId = vessel.id;
-                RTCore.Instance.Antennas.Register(vessel.id, this);
-            }
+            Destroyed.Invoke(this);
         }
 
         public int CompareTo(IAntenna antenna)
@@ -218,7 +187,7 @@ namespace RemoteTech
 
         public override string ToString()
         {
-            return String.Format("ModuleRTAntennaPassive(Name: {0}, Guid: {1}, Omni: {2})", Name, mRegisteredId, Omni);
+            return String.Format("ModuleRTAntennaPassive(Name: {0}, Guid: {1}, Omni: {2})", Name, Guid, Omni);
         }
     }
 
