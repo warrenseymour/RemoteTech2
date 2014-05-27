@@ -32,28 +32,39 @@ namespace RemoteTech
             if (burn != null) f.Remove(burn);
             OriginalDelta = Node.DeltaV.magnitude;
             RemainingDelta = Node.GetBurnVector(f.Vessel.orbit).magnitude;
-            RemainingTime = RemainingDelta / (FlightCore.GetTotalThrust(f.Vessel) / f.Vessel.GetTotalMass());
+            RemainingTime = BurnTime(Node, f);
             return true;
         }
 
         public override bool Execute(FlightComputer f, FlightCtrlState fcs)
         {
-            if (RemainingDelta > 0)
+            fcs.mainThrottle = RemainingDelta > 1 ? 1.0f : 0.5f;
+
+            if (RemainingDelta > 0.1)
             {
                 var forward = Node.GetBurnVector(f.Vessel.orbit).normalized;
                 var up = (f.SignalProcessor.Body.position - f.SignalProcessor.Position).normalized;
                 var orientation = Quaternion.LookRotation(forward, up);
                 FlightCore.HoldOrientation(fcs, f, orientation);
-                fcs.mainThrottle = 1.0f;
+
                 RemainingTime -= TimeWarp.deltaTime;
-                RemainingDelta -= (FlightCore.GetTotalThrust(f.Vessel) / f.Vessel.GetTotalMass()) * TimeWarp.deltaTime;
+                RemainingDelta = Node.GetBurnVector(f.Vessel.orbit).magnitude;
+
                 return false;
             }
             f.Enqueue(AttitudeCommand.Off(), true, true, true);
             return true;
         }
 
-        public static ManeuverCommand WithNode(ManeuverNode node)
+        private static double BurnTime(ManeuverNode node, FlightComputer f)
+        {
+            double deltaV = node.DeltaV.magnitude;
+            double accel = (FlightCore.GetTotalThrust(f.Vessel) / f.Vessel.GetTotalMass());
+
+            return deltaV / accel;
+        }
+
+        public static ManeuverCommand WithNode(ManeuverNode node, FlightComputer f)
         {
             var newNode = new ManeuverCommand()
             {
@@ -67,7 +78,7 @@ namespace RemoteTech
                     UT = node.UT,
                     nodeRotation = node.nodeRotation,
                 },
-                TimeStamp = node.UT,
+                TimeStamp = node.UT - (BurnTime(node, f) / 2)
             };
             return newNode;
         }
