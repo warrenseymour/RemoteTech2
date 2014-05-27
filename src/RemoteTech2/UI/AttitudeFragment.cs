@@ -1,5 +1,6 @@
 ﻿using System;
 using UnityEngine;
+using Engineer.VesselSimulator;
 
 namespace RemoteTech
 {
@@ -322,6 +323,9 @@ namespace RemoteTech
         {
             if (mFlightComputer.Vessel.patchedConicSolver == null || mFlightComputer.Vessel.patchedConicSolver.maneuverNodes.Count == 0) return;
             var cmd = ManeuverCommand.WithNode(mFlightComputer.Vessel.patchedConicSolver.maneuverNodes[0]);
+
+            cmd.TimeStamp -= BurnTime(cmd.Node.DeltaV.magnitude) / 2;
+
             if (cmd.TimeStamp < RTUtil.GameTime + mFlightComputer.Delay)
             {
                 RTUtil.ScreenMessage("[Flight Computer]: Signal delay is too high to execute this maneuver at the proper time.");
@@ -330,6 +334,15 @@ namespace RemoteTech
             {
                 mFlightComputer.Enqueue(cmd, false, false, true);
             }
+        }
+
+        private double BurnTime(double deltaV)
+        {
+            double thrust = SimManager.LastStage.thrust;
+            double mass   = SimManager.LastStage.mass;
+            double accel  = thrust / mass;
+
+            return deltaV / accel;
         }
     }
 }

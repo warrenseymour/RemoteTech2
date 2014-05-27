@@ -53,6 +53,9 @@
       <HintPath>C:\Users\Sander\Desktop\KSP Dev\KSP_Data\Managed\UnityEngine.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="VesselSimulator">
+      <HintPath>..\..\..\void\GameData\VOID\Plugins\VesselSimulator.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="API\API.cs" />
